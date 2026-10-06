@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>揪團點餐</title>
 <meta name="description" content="便當、飲料一起點，截止自動統計，誰付了一目了然。">
 <meta name="theme-color" content="#EDF1EA">
@@ -63,12 +63,14 @@
   color-scheme:dark;
 }
 *{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
+html{-webkit-text-size-adjust:100%;touch-action:manipulation}
+/* iOS 輸入框字小於 16px 會自動放大畫面，所有輸入框都用 16px */
+input,textarea,select{font-size:16px}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.5;-webkit-tap-highlight-color:transparent;-webkit-font-smoothing:antialiased}
 body.lock{overflow:hidden}
 button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;touch-action:manipulation}
 a{color:inherit;text-decoration:none}
-input,textarea{font:inherit;color:inherit}
+input,textarea{font-family:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--leaf);outline-offset:2px}
 .num{font-variant-numeric:tabular-nums}
 .muted{color:var(--muted)}
@@ -271,8 +273,10 @@ svg{display:block;flex:none}
 .chip.on{border-color:var(--leaf);background:var(--leaf-soft);color:var(--leaf)}
 .chip small{color:var(--muted);font-weight:400;font-size:12.5px}
 .chip.on small{color:var(--leaf)}
-.field{width:100%;height:46px;border-radius:12px;border:1.5px solid var(--line);background:var(--surface-2);padding:0 12px;outline:none}
+.field{display:block;min-width:0;max-width:100%;font-size:16px;width:100%;height:46px;border-radius:12px;border:1.5px solid var(--line);background:var(--surface-2);padding:0 12px;outline:none}
 .field:focus{border-color:var(--leaf)}
+input[type=time].field{-webkit-appearance:none;appearance:none;text-align:left;line-height:46px}
+input[type=time].field::-webkit-date-and-time-value{text-align:left;margin:0}
 textarea.field{height:auto;min-height:150px;padding:10px 12px;line-height:1.6;resize:vertical}
 .lbl{display:block;font-size:13.5px;font-weight:700;margin:16px 0 6px}
 .hint{font-size:12.5px;color:var(--muted);margin-top:5px}
@@ -338,11 +342,11 @@ textarea.field{height:auto;min-height:150px;padding:10px 12px;line-height:1.6;re
 .ecat-h + .erow{margin-top:4px}
 .erow-1,.erow-2,.orow{display:flex;gap:6px;align-items:center}
 .erow .field,.orow .field{height:42px;min-width:0;flex:1}
-.field.sm{height:36px!important;font-size:13.5px}
+.field.sm{height:38px!important;font-size:16px}
 .money-in{display:flex;align-items:center;height:42px;border:1.5px solid var(--line);background:var(--surface-2);border-radius:12px;padding-left:8px;width:76px;flex:none;cursor:text}
 .money-in:focus-within{border-color:var(--leaf)}
 .money-in span{font-size:12.5px;color:var(--muted);flex:none}
-.money-in input{width:100%;min-width:0;border:0;background:transparent;outline:none;height:100%;padding:0 6px 0 4px;font-variant-numeric:tabular-nums;font-weight:500}
+.money-in input{font-size:16px;width:100%;min-width:0;border:0;background:transparent;outline:none;height:100%;padding:0 6px 0 4px;font-variant-numeric:tabular-nums;font-weight:500}
 .mini{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;color:var(--muted);flex:none}
 .mini:active{background:var(--surface-2)}
 .mini.del{color:var(--chili)}
@@ -350,7 +354,7 @@ textarea.field{height:auto;min-height:150px;padding:10px 12px;line-height:1.6;re
 .addrow{display:flex;align-items:center;gap:6px;justify-content:center;width:100%;height:42px;border-radius:12px;border:1.5px dashed var(--line);color:var(--leaf);font-weight:700;font-size:14px;margin-top:8px}
 .orow{padding-top:8px}
 .szrow{display:flex;align-items:center;gap:6px;padding:2px 0 10px 4px;font-size:13px;color:var(--muted)}
-.szrow .field{width:64px;height:34px;padding:0 8px;text-align:center;font-size:14px;color:var(--ink)}
+.szrow .field{width:64px;height:36px;padding:0 8px;text-align:center;font-size:16px;color:var(--ink)}
 .money-in span{max-width:2.6em;overflow:hidden;white-space:nowrap}
 .chips.sm{margin:4px 0 2px}
 .chips.sm .chip{min-height:34px;font-size:13.5px;padding:0 12px}
