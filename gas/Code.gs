@@ -19,7 +19,7 @@ const TZ = 'Asia/Taipei';
 const TAB = { shops: '店家', menu: '菜單', options: '選項', members: '成員', groups: '開團', orders: '訂單' };
 const HEAD = {
   shops:   ['店名', '類型', '電話', '備註', '停用'],
-  menu:    ['店名', '分類', '品名', '價格', '大杯價', '說明'],
+  menu:    ['店名', '分類', '品名', '價格', '第二容量價', '說明', '容量名稱'],
   options: ['類型', '選項組', '選項', '加價', '複選', '必選'],
   members: ['姓名'],
   groups:  ['團ID', '店名', '截止時間', '狀態', '備註', '建立時間', '已推播'],
@@ -147,12 +147,14 @@ const ACTIONS = {
 
     const key = orig || name;
     const menu = rows_('menu').filter(r => String(r[0]).trim() !== key && String(r[0]).trim());
-    items.forEach(it => menu.push([name, it.cat, it.item, it.price, it.priceL || '', it.desc]));
+    items.forEach(it => menu.push([name, it.cat, it.item, it.price, it.priceL || '', it.desc, it.sizes]));
     writeRows_('menu', menu);
 
-    if (orig && orig !== name) {         // 改店名：開過的團一起改，菜單才對得上
+    if (orig && orig !== name) {         // 改店名：開過的團、專屬選項一起改，才對得上
       const gs = sheet_('groups'), gv = gs.getDataRange().getValues();
       for (let i = 1; i < gv.length; i++) if (String(gv[i][1]).trim() === orig) gs.getRange(i + 1, 2).setValue(name);
+      const os = sheet_('options'), ov = os.getDataRange().getValues();
+      for (let i = 1; i < ov.length; i++) if (String(ov[i][0]).trim() === orig) os.getRange(i + 1, 1).setValue(name);
     }
     return { ok: true };
   },
@@ -165,13 +167,15 @@ const ACTIONS = {
     }
     writeRows_('shops', rows_('shops').filter(r => String(r[0]).trim() && String(r[0]).trim() !== name));
     writeRows_('menu', rows_('menu').filter(r => String(r[0]).trim() && String(r[0]).trim() !== name));
+    writeRows_('options', rows_('options').filter(r => String(r[0]).trim() && String(r[0]).trim() !== name));
     return { ok: true };
   },
 
-  // 整套換掉某一類型（便當／飲料）的選項
+  // 整套換掉一組選項。type = 便當／飲料（共用）或店名（這家店專屬；groups 空的 = 改回用共用）
   saveOptions(p) {
     needPin_(p);
-    const type = p.type === '飲料' ? '飲料' : '便當';
+    const type = String(p.type || '').trim();
+    if (type !== '便當' && type !== '飲料' && !readShops_().some(s => s.name === type)) throw err_('NOSHOP', '找不到「' + type + '」');
     const rows = rows_('options').filter(r => String(r[0]).trim() && String(r[0]).trim() !== type);
     (Array.isArray(p.groups) ? p.groups : []).slice(0, 10).forEach(g => {
       const gname = String(g.name || '').trim().slice(0, 12);
@@ -225,7 +229,7 @@ function readAll_() {
     shops: readShops_(),
     menu: rows_('menu').filter(r => r[0] && r[2]).map(r => ({
       shop: String(r[0]).trim(), cat: String(r[1] || '其他').trim(), item: String(r[2]).trim(),
-      price: num_(r[3]), priceL: num_(r[4]), desc: String(r[5] || ''),
+      price: num_(r[3]), priceL: num_(r[4]), desc: String(r[5] || ''), sizes: String(r[6] || ''),
     })),
     options: rows_('options').filter(r => r[0] && r[2]).map(r => ({
       type: String(r[0]).trim(), group: String(r[1] || '客製').trim(), label: String(r[2]).trim(),
@@ -247,6 +251,7 @@ function readShops_() {
 // 整張表（標題列以下）換成 rows
 function writeRows_(k, rows) {
   const sh = sheet_(k), n = HEAD[k].length, last = sh.getLastRow();
+  sh.getRange(1, 1, 1, n).setValues([HEAD[k]]).setFontWeight('bold').setBackground('#DDEFE3');   // 舊版表格補上新欄位標題
   if (last > 1) sh.getRange(2, 1, last - 1, Math.max(n, sh.getLastColumn())).clearContent();
   if (!rows.length) return;
   const data = rows.map(r => { const x = r.slice(0, n); while (x.length < n) x.push(''); return x; });
@@ -260,7 +265,13 @@ function cleanItems_(items, type) {
     price: Math.max(0, Math.round(num_(it.price))),
     priceL: type === '飲料' ? Math.max(0, Math.round(num_(it.priceL))) : 0,
     desc: String(it.desc || '').trim().slice(0, 40),
+    sizes: type === '飲料' && num_(it.priceL) ? sizes_(it.sizes) : '',
   }));
+}
+// 兩種容量的名稱，例如「M/L」「L/瓶」
+function sizes_(s) {
+  const p = String(s || '').split('/').map(x => x.trim().slice(0, 4)).filter(String);
+  return p.length === 2 && p[0] !== p[1] ? p.join('/') : 'M/L';
 }
 
 /* ================= LINE Bot ================= */
@@ -534,7 +545,7 @@ function groupRow_(id) {
 function cleanLines_(lines) {
   return (Array.isArray(lines) ? lines : []).filter(l => l && l.item && +l.qty > 0).slice(0, 30).map(l => ({
     item: String(l.item).slice(0, 40),
-    size: l.size === 'L' ? 'L' : (l.size === 'M' ? 'M' : ''),
+    size: String(l.size || '').trim().slice(0, 6),
     opts: (Array.isArray(l.opts) ? l.opts : []).map(String).slice(0, 12),
     unit: Math.max(0, Math.round(+l.unit || 0)),
     qty: Math.min(50, Math.max(1, Math.round(+l.qty))),

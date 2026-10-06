@@ -330,6 +330,9 @@ textarea.field{height:auto;min-height:150px;padding:10px 12px;line-height:1.6;re
 .mini:disabled{opacity:.25}
 .addrow{display:flex;align-items:center;gap:6px;justify-content:center;width:100%;height:42px;border-radius:12px;border:1.5px dashed var(--line);color:var(--leaf);font-weight:700;font-size:14px;margin-top:8px}
 .orow{padding-top:8px}
+.szrow{display:flex;align-items:center;gap:6px;padding:2px 0 10px 4px;font-size:13px;color:var(--muted)}
+.szrow .field{width:64px;height:34px;padding:0 8px;text-align:center;font-size:14px;color:var(--ink)}
+.money-in span{max-width:2.6em;overflow:hidden;white-space:nowrap}
 .chips.sm{margin:4px 0 2px}
 .chips.sm .chip{min-height:34px;font-size:13.5px;padding:0 12px}
 .chip.mem{padding-right:3px;gap:2px}
@@ -413,7 +416,7 @@ const sumQty = lines => lines.reduce((s, l) => s + l.qty, 0);
 function cleanLines(lines) {
   return (Array.isArray(lines) ? lines : []).filter(l => l && l.item && +l.qty > 0).slice(0, 30).map(l => ({
     item: String(l.item).slice(0, 40),
-    size: l.size === 'L' ? 'L' : (l.size === 'M' ? 'M' : ''),
+    size: String(l.size || '').trim().slice(0, 6),
     opts: (l.opts || []).map(String).slice(0, 12),
     unit: Math.max(0, Math.round(+l.unit || 0)),
     qty: Math.min(50, Math.max(1, Math.round(+l.qty))),
@@ -425,7 +428,13 @@ function cleanItems(items, type) {
     cat: String(it.cat || '').trim().slice(0, 20) || '其他', item: String(it.item).trim().slice(0, 40),
     price: Math.max(0, Math.round(+it.price || 0)), priceL: type === '飲料' ? Math.max(0, Math.round(+it.priceL || 0)) : 0,
     desc: String(it.desc || '').trim().slice(0, 40),
+    sizes: type === '飲料' && +it.priceL ? splitSizes(it.sizes).join('/') : '',
   }));
+}
+// 兩種容量的名稱，例如「M/L」「L/瓶」；沒設定或不合理就用 M/L
+function splitSizes(s) {
+  const p = String(s || '').split('/').map(x => x.trim().slice(0, 4)).filter(Boolean);
+  return p.length === 2 && p[0] !== p[1] ? p : ['M', 'L'];
 }
 function cleanOptions(groups) {
   return (Array.isArray(groups) ? groups : []).map(g => ({
@@ -565,6 +574,7 @@ const Mock = (() => {
         const cur = d.shops.find(x => x.name === orig); if (!cur) throw apiErr('NOSHOP', '找不到「' + orig + '」');
         Object.assign(cur, info);
         d.groups.forEach(g => { if (g.shop === orig) g.shop = name; });
+        d.options.forEach(o => { if (o.type === orig) o.type = name; });
       } else d.shops.push(info);
       d.menu = d.menu.filter(m => m.shop !== (orig || name)).concat(items.map(it => Object.assign({ shop: name }, it)));
       return { ok: true };
@@ -573,11 +583,14 @@ const Mock = (() => {
       need(p);
       if (d.groups.some(g => g.shop === p.name && g.status === 'open' && g.deadline > now())) throw apiErr('BUSY', '這家店還有進行中的團，先結單再刪除');
       d.shops = d.shops.filter(s => s.name !== p.name); d.menu = d.menu.filter(m => m.shop !== p.name);
+      d.options = d.options.filter(o => o.type !== p.name);
       return { ok: true };
     },
+    // type = 便當／飲料（共用選項）或店名（這家店的專屬選項；groups 空的就是改回共用）
     saveOptions(d, p) {
       need(p);
-      const type = p.type === '飲料' ? '飲料' : '便當';
+      const type = String(p.type || '');
+      if (type !== '便當' && type !== '飲料' && !d.shops.some(s => s.name === type)) throw apiErr('NOSHOP', '找不到「' + type + '」');
       d.options = d.options.filter(o => o.type !== type).concat(cleanOptions(p.groups).flatMap(g => g.items.map(i => ({ type, group: g.name, label: i.label, add: i.add, multi: g.multi, required: g.required }))));
       return { ok: true };
     },
@@ -625,15 +638,19 @@ const curGroup = () => S.data.groups.find(g => g.id === S.gid);
 const ordersOf = gid => S.data.orders.filter(o => o.groupId === gid && o.lines && o.lines.length);
 const myOrder = gid => S.data.orders.find(o => o.groupId === gid && o.name === S.me);
 const myLines = gid => { const o = myOrder(gid); return o ? o.lines.map(l => Object.assign({}, l, { opts: (l.opts || []).slice() })) : []; };
-function optionsFor(type) {
+// key = 店名（專屬選項）或 便當／飲料（共用選項）
+function groupOpts(key) {
   const out = [];
-  S.data.options.filter(o => o.type === type).forEach(o => {
+  S.data.options.filter(o => o.type === key).forEach(o => {
     let g = out.find(x => x.name === o.group);
     if (!g) { g = { name: o.group, multi: o.multi, required: o.required, items: [] }; out.push(g); }
     g.items.push({ label: o.label, add: +o.add || 0 });
   });
   return out;
 }
+const hasOwnOpts = name => !!name && S.data.options.some(o => o.type === name);
+const optionsFor = shop => hasOwnOpts(shop.name) ? groupOpts(shop.name) : groupOpts(shop.type);
+const sizesOf = m => splitSizes(m.sizes);
 const AV = ['--a1', '--a2', '--a3', '--a4', '--a5', '--a6'];
 function avatar(name, cls = '') {
   if (!name) return `<span class="av empty ${cls}">?</span>`;
@@ -812,7 +829,8 @@ function menuHtml(g) {
     items.filter(m => (m.cat || '其他') === c).forEach(m => {
       const myQty = mine.filter(l => l.item === m.item).reduce((s, l) => s + l.qty, 0);
       const plainIdx = mine.findIndex(l => l.item === m.item && !l.size && !l.opts.length && !l.note);
-      const price = m.priceL ? `<span class="price">M ${money(m.price)}</span><span class="price">L ${money(m.priceL)}</span>` : `<span class="price">${money(m.price)}</span>`;
+      const sz = sizesOf(m);
+      const price = m.priceL ? `<span class="price">${esc(sz[0])} ${money(m.price)}</span><span class="price">${esc(sz[1])} ${money(m.priceL)}</span>` : `<span class="price">${money(m.price)}</span>`;
       let ctl;
       if (!open) ctl = myQty ? `<span class="cnt">×${myQty}</span>` : '';
       else if (!drink && plainIdx >= 0) {
@@ -1005,18 +1023,19 @@ function openItem(gid, itemName, editIdx) {
   const g = S.data.groups.find(x => x.id === gid); if (!g || !isOpen(g)) return;
   if (!S.me) return askName(() => openItem(gid, itemName, editIdx));
   const shop = shopOf(g), m = menuOf(g.shop).find(x => x.item === itemName); if (!m) return;
-  const drink = shop.type === '飲料', groups = optionsFor(shop.type);
+  const drink = shop.type === '飲料', groups = optionsFor(shop);
+  const sz = sizesOf(m);
   const base = editIdx != null ? myLines(gid)[editIdx] : null;
-  const st = { size: base ? base.size : (m.priceL ? 'M' : ''), qty: base ? base.qty : 1, sel: {} };
+  const st = { size: m.priceL ? (base && sz.includes(base.size) ? base.size : sz[0]) : '', qty: base ? base.qty : 1, sel: {} };
   groups.forEach(gr => { st.sel[gr.name] = new Set(); });
   if (base) base.opts.forEach(o => { const gr = groups.find(x => x.items.some(i => i.label === o)); if (gr) st.sel[gr.name].add(o); });
-  const unit = () => (st.size === 'L' ? m.priceL : m.price) + groups.reduce((s, gr) => s + gr.items.reduce((t, i) => t + (st.sel[gr.name].has(i.label) ? i.add : 0), 0), 0);
+  const unit = () => (m.priceL && st.size === sz[1] ? m.priceL : m.price) + groups.reduce((s, gr) => s + gr.items.reduce((t, i) => t + (st.sel[gr.name].has(i.label) ? i.add : 0), 0), 0);
   const opts = () => groups.flatMap(gr => gr.items.filter(i => st.sel[gr.name].has(i.label)).map(i => i.label));
   const html = `
     <h2 class="sh-h">${esc(m.item)}</h2>
-    <div class="sh-sub">${m.desc ? esc(m.desc) + ' · ' : ''}${m.priceL ? `M ${money(m.price)} / L ${money(m.priceL)}` : money(m.price)}</div>
+    <div class="sh-sub">${m.desc ? esc(m.desc) + ' · ' : ''}${m.priceL ? `${esc(sz[0])} ${money(m.price)} / ${esc(sz[1])} ${money(m.priceL)}` : money(m.price)}</div>
     ${m.priceL ? `<div class="ogrp" data-g="__size"><div class="ogrp-h"><span>容量</span><span class="req must">必選</span></div><div class="chips">
-      <button class="chip" data-size="M">中杯 M <small>${money(m.price)}</small></button><button class="chip" data-size="L">大杯 L <small>${money(m.priceL)}</small></button></div></div>` : ''}
+      <button class="chip" data-size="${esc(sz[0])}">${esc(sz[0])} <small>${money(m.price)}</small></button><button class="chip" data-size="${esc(sz[1])}">${esc(sz[1])} <small>${money(m.priceL)}</small></button></div></div>` : ''}
     ${groups.map(gr => `<div class="ogrp" data-g="${esc(gr.name)}"><div class="ogrp-h"><span>${esc(gr.name)}</span><span class="req ${gr.required ? 'must' : ''}">${gr.required ? '必選' : gr.multi ? '可複選' : '選填'}</span></div>
       <div class="chips">${gr.items.map(i => `<button class="chip" data-opt="${esc(i.label)}">${esc(i.label)}${i.add ? ` <small>+${i.add}</small>` : ''}</button>`).join('')}</div></div>`).join('')}
     <div class="ogrp"><div class="ogrp-h"><label for="it-note">備註</label><span class="req">選填</span></div>
@@ -1173,10 +1192,11 @@ function startEdit(name) {
   const cats = [];
   if (s) menuOf(name).forEach(m => {
     let c = cats.find(x => x.name === m.cat);
-    if (!c) { c = { name: m.cat, items: [] }; cats.push(c); }
+    if (!c) { c = { name: m.cat, sizes: ['M', 'L'], items: [] }; cats.push(c); }
+    if (m.priceL) c.sizes = sizesOf(m);
     c.items.push({ item: m.item, price: String(m.price), priceL: m.priceL ? String(m.priceL) : '', desc: m.desc || '' });
   });
-  if (!cats.length) cats.push({ name: '主餐', items: [blankItem()] });
+  if (!cats.length) cats.push({ name: '主餐', sizes: ['M', 'L'], items: [blankItem()] });
   S.edit = { orig: s ? s.name : null, shop: { name: s ? s.name : '', type: s ? s.type : '便當', phone: s ? s.phone || '' : '', note: s ? s.note || '' : '', disabled: !!(s && s.disabled) }, cats, dirty: false, saving: false };
   location.hash = 'shop';
 }
@@ -1188,20 +1208,21 @@ function shopEditHtml() {
   return `<div class="panel">
     <label class="lbl" style="margin-top:0" for="ed-name">店名</label><input class="field" id="ed-name" data-f="name" maxlength="30" value="${esc(s.name)}" placeholder="例如：巷口自助餐">
     <label class="lbl">類型</label><div class="chips">${['便當', '飲料'].map(t => `<button class="chip ${s.type === t ? 'on' : ''}" data-act="ed-type" data-v="${t}">${t}</button>`).join('')}</div>
-    <div class="hint">點餐時會出現${drink ? '甜度、冰塊、加料' : '飯少、不要辣、加點'}這一套選項，可以在「選項」修改。</div>
+    <div class="hint">${hasOwnOpts(E.orig) ? '這家店使用自己的專屬選項' : `點餐時使用「${s.type}」共用選項（${esc(groupOpts(s.type).map(g => g.name).join('、') || '目前是空的')}）`}，可以到「選項」修改。</div>
     <label class="lbl" for="ed-phone">電話</label><input class="field" id="ed-phone" data-f="phone" type="tel" maxlength="30" value="${esc(s.phone)}" placeholder="選填">
     <label class="lbl" for="ed-note">備註</label><input class="field" id="ed-note" data-f="note" maxlength="60" value="${esc(s.note)}" placeholder="選填，例如：滿 10 杯外送">
     <div class="switch-row"><span><b>暫停使用</b><small>開團時看不到這家店，菜單會保留</small></span><button class="tog ${s.disabled ? 'on' : ''}" data-act="ed-disable" aria-label="暫停使用"></button></div>
   </div>
   <div class="sect-h"><h2>菜單</h2><span class="num">${n} 個品項</span><span class="spacer"></span><button class="sbtn" data-act="ed-import">貼上匯入</button></div>
-  ${drink ? '<div class="hint" style="margin:-4px 2px 0">左邊是中杯價、右邊是大杯價；只有一種容量的話，大杯價留空。</div>' : ''}
+  ${drink ? '<div class="hint" style="margin:-4px 2px 0">每個分類可以設定兩種容量的名稱，例如「M / L」或「L / 瓶」。只有一種容量的品項，第二格價格留空。</div>' : ''}
   ${E.cats.map((c, ci) => `<div class="ecat">
     <div class="ecat-h"><input class="field" data-f="cat" data-ci="${ci}" maxlength="20" value="${esc(c.name)}" placeholder="分類名稱，例如：主餐" aria-label="分類名稱">
       <button class="mini" data-act="ec-up" data-ci="${ci}" ${ci ? '' : 'disabled'} aria-label="分類上移">${I.up}</button><button class="mini" data-act="ec-down" data-ci="${ci}" ${ci < E.cats.length - 1 ? '' : 'disabled'} aria-label="分類下移">${I.down}</button><button class="mini del" data-act="ec-del" data-ci="${ci}" aria-label="刪除分類">${I.x}</button></div>
+    ${drink ? `<div class="szrow"><span>容量名稱</span><input class="field" data-f="sz0" data-ci="${ci}" maxlength="4" value="${esc(c.sizes[0])}" aria-label="第一種容量"><span>/</span><input class="field" data-f="sz1" data-ci="${ci}" maxlength="4" value="${esc(c.sizes[1])}" aria-label="第二種容量"></div>` : ''}
     ${c.items.map((it, ii) => `<div class="erow" data-ci="${ci}" data-ii="${ii}">
       <div class="erow-1"><input class="field" data-f="item" maxlength="40" value="${esc(it.item)}" placeholder="品名" aria-label="品名">
-        <label class="money-in"><span>${drink ? '中' : '$'}</span><input data-f="price" inputmode="numeric" value="${esc(it.price)}" placeholder="價格" aria-label="價格"></label>
-        ${drink ? `<label class="money-in"><span>大</span><input data-f="priceL" inputmode="numeric" value="${esc(it.priceL)}" placeholder="—" aria-label="大杯價"></label>` : ''}</div>
+        <label class="money-in"><span class="lab0">${drink ? esc(c.sizes[0]) : '$'}</span><input data-f="price" inputmode="numeric" value="${esc(it.price)}" placeholder="價格" aria-label="價格"></label>
+        ${drink ? `<label class="money-in"><span class="lab1">${esc(c.sizes[1])}</span><input data-f="priceL" inputmode="numeric" value="${esc(it.priceL)}" placeholder="—" aria-label="第二種容量價格"></label>` : ''}</div>
       <div class="erow-2"><input class="field sm" data-f="desc" maxlength="40" value="${esc(it.desc)}" placeholder="說明（選填）" aria-label="說明">
         <button class="mini" data-act="ei-up" ${ii ? '' : 'disabled'} aria-label="上移">${I.up}</button><button class="mini" data-act="ei-down" ${ii < c.items.length - 1 ? '' : 'disabled'} aria-label="下移">${I.down}</button><button class="mini del" data-act="ei-del" aria-label="刪除品項">${I.x}</button></div>
     </div>`).join('')}
@@ -1220,9 +1241,13 @@ async function saveShop() {
   const E = S.edit, name = E.shop.name.trim();
   if (!name) return markBad('#ed-name', '請填店名');
   if (S.data.shops.some(s => s.name === name && s.name !== E.orig)) return markBad('#ed-name', '已經有「' + name + '」了');
-  const items = [], seen = new Set();
+  const items = [], seen = new Set(), drink = E.shop.type === '飲料';
   for (let ci = 0; ci < E.cats.length; ci++) {
-    const c = E.cats[ci];
+    const c = E.cats[ci], s0 = c.sizes[0].trim(), s1 = c.sizes[1].trim();
+    if (drink && c.items.some(i => i.item.trim() && i.priceL)) {
+      if (!s0 || !s1) return markBad(`[data-f="${s0 ? 'sz1' : 'sz0'}"][data-ci="${ci}"]`, '「' + (c.name || '這個分類') + '」的容量名稱沒填');
+      if (s0 === s1) return markBad(`[data-f="sz1"][data-ci="${ci}"]`, '兩種容量的名稱不能一樣');
+    }
     for (let ii = 0; ii < c.items.length; ii++) {
       const it = c.items[ii], nm = it.item.trim(), row = `.erow[data-ci="${ci}"][data-ii="${ii}"]`;
       if (!nm && !it.price && !it.desc.trim()) continue;
@@ -1230,7 +1255,7 @@ async function saveShop() {
       if (it.price === '') return markBad(row + ' [data-f="price"]', '「' + nm + '」沒填價格');
       if (seen.has(nm)) return markBad(row + ' [data-f="item"]', '「' + nm + '」重複了');
       seen.add(nm);
-      items.push({ cat: c.name.trim() || '其他', item: nm, price: +it.price, priceL: +it.priceL || 0, desc: it.desc.trim() });
+      items.push({ cat: c.name.trim() || '其他', item: nm, price: +it.price, priceL: +it.priceL || 0, desc: it.desc.trim(), sizes: s0 + '/' + s1 });
     }
   }
   if (!items.length) return toast('菜單至少要有一個品項');
@@ -1243,25 +1268,32 @@ async function saveShop() {
   E.saving = false; renderBar();
 }
 
+// 「# 分類 L/瓶」：分類後面可以接兩種容量的名稱
 function parseMenu(text, drink) {
-  let cat = '主餐'; const out = [];
+  let cat = '主餐', sizes = null; const out = [];
   String(text || '').split(/\r?\n/).forEach(raw => {
     const l = raw.trim(); if (!l) return;
-    if (/^[#＃]/.test(l)) { cat = l.replace(/^[#＃]\s*/, '').replace(/[（(].*$/, '').trim() || cat; return; }
+    if (/^[#＃]/.test(l)) {
+      let h = l.replace(/^[#＃]\s*/, '').replace(/[（(].*$/, '').trim();
+      const sm = h.match(/^(.*?)\s+(\S{1,4})\s*[\/／]\s*(\S{1,4})$/);
+      sizes = null;
+      if (sm) { h = sm[1].trim(); sizes = [sm[2], sm[3]]; }
+      cat = h || cat; return;
+    }
     const m = l.match(/^(.+?)\s+\$?(\d+)(?:\s+\$?(\d+)(?=\s|$))?(?:\s+(.*))?$/);
     if (!m) return;
     let priceL = m[3] ? +m[3] : 0, desc = (m[4] || '').trim();
     if (!drink && m[3]) { desc = (m[3] + ' ' + desc).trim(); priceL = 0; }
-    out.push({ cat, item: m[1].trim(), price: +m[2], priceL, desc });
+    out.push({ cat, sizes, item: m[1].trim(), price: +m[2], priceL, desc });
   });
   return out;
 }
 function openImport() {
   const drink = S.edit.shop.type === '飲料';
-  const ph = drink ? '# 奶茶&#10;珍珠奶茶 50 60&#10;烏龍拿鐵 60 70 鮮奶&#10;# 原茶&#10;四季春 30 35' : '# 主餐&#10;雞腿飯 110 炸雞腿、三樣配菜&#10;排骨飯 95&#10;# 湯品&#10;貢丸湯 30';
+  const ph = drink ? '# 奶茶 M/L&#10;珍珠奶茶 50 60&#10;烏龍拿鐵 60 70 鮮奶&#10;# 純茶 L/瓶&#10;四季春 30 45' : '# 主餐&#10;雞腿飯 110 炸雞腿、三樣配菜&#10;排骨飯 95&#10;# 湯品&#10;貢丸湯 30';
   openSheet('import', `<h2 class="sh-h">貼上匯入</h2><div class="sh-sub">一次貼上整份菜單，匯入後還能逐項修改。</div>
     <textarea class="field" id="im-t" style="margin-top:14px" placeholder="${ph}"></textarea>
-    <div class="hint">一行一個品項：${drink ? '「品名 中杯價 大杯價 說明」，只有一種容量就寫一個價格' : '「品名 價格 說明」'}，說明可以不寫。「#」開頭的行是分類。<b id="im-n"></b></div>
+    <div class="hint">一行一個品項：${drink ? '「品名 價格 第二種容量價格 說明」，只有一種容量就寫一個價格' : '「品名 價格 說明」'}，說明可以不寫。「#」開頭的行是分類${drink ? '，分類後面可以寫容量名稱，例如「# 純茶 L/瓶」，沒寫就是 M/L' : ''}。<b id="im-n"></b></div>
     <div class="sheet-foot"><button class="btn" id="im-ok" disabled>加入菜單</button></div>`, {
     mount(root) {
       const ta = $('#im-t', root), ok = $('#im-ok', root);
@@ -1272,7 +1304,8 @@ function openImport() {
         E.cats = E.cats.filter(c => c.items.length);
         items.forEach(it => {
           let c = E.cats.find(x => x.name.trim() === it.cat);
-          if (!c) { c = { name: it.cat, items: [] }; E.cats.push(c); }
+          if (!c) { c = { name: it.cat, sizes: ['M', 'L'], items: [] }; E.cats.push(c); }
+          if (it.sizes) c.sizes = it.sizes.slice();
           c.items.push({ item: it.item, price: String(it.price), priceL: it.priceL ? String(it.priceL) : '', desc: it.desc });
         });
         E.dirty = true; closeSheet(); renderMain(); renderBar(); toast('加入了 ' + items.length + ' 個品項，記得按儲存');
@@ -1281,15 +1314,23 @@ function openImport() {
   });
 }
 
+// type = 便當／飲料（共用選項）或店名（專屬選項）
+const cloneGroups = gs => gs.map(g => ({ name: g.name, multi: g.multi, required: g.required, items: g.items.map(i => ({ label: i.label, add: i.add ? String(i.add) : '' })) }));
 function loadOpt(type) {
-  S.opt = { type, dirty: false, saving: false, groups: optionsFor(type).map(g => ({ name: g.name, multi: g.multi, required: g.required, items: g.items.map(i => ({ label: i.label, add: i.add ? String(i.add) : '' })) })) };
+  const shared = type === '便當' || type === '飲料', groups = groupOpts(type);
+  S.opt = { type, shared, own: shared || groups.length > 0, dirty: false, saving: false, groups: cloneGroups(groups) };
 }
 function aOptionsHtml() {
   if (!S.opt) loadOpt('飲料');
-  const O = S.opt;
-  return `<div class="chips" style="margin-top:14px">${['飲料', '便當'].map(t => `<button class="chip ${O.type === t ? 'on' : ''}" data-act="opt-type" data-v="${t}">${t}店的選項</button>`).join('')}</div>
-  <div class="hint" style="margin:8px 2px 0">套用到所有「${O.type}」店家，點餐時照這個順序顯示。「必選」的沒選就不能加入。</div>
-  ${O.groups.map((g, gi) => `<div class="ecat">
+  const O = S.opt, shop = O.shared ? null : S.data.shops.find(s => s.name === O.type);
+  const keys = [['飲料', '飲料共用'], ['便當', '便當共用']].concat(S.data.shops.map(s => [s.name, s.name]));
+  let h = `<div class="chips" style="margin-top:14px">${keys.map(([k, l]) => `<button class="chip ${O.type === k ? 'on' : ''}" data-act="opt-type" data-v="${esc(k)}">${esc(l)}${hasOwnOpts(k) && k !== '飲料' && k !== '便當' ? ' <small>專屬</small>' : ''}</button>`).join('')}</div>`;
+  if (!O.own) return h + `<div class="panel"><b>「${esc(O.type)}」目前使用「${esc(shop ? shop.type : '')}共用」選項</b>
+    <div class="hint">${esc(groupOpts(shop ? shop.type : '').map(g => g.name + '：' + g.items.map(i => i.label).join('、')).join('　') || '共用選項是空的')}</div>
+    <div class="hint">這家店的甜度、冰塊或加料跟別家不一樣的話，可以幫它建一套專屬選項，不會影響其他店。</div>
+    <button class="btn" style="width:100%;margin-top:14px" data-act="opt-own">建立專屬選項（先複製共用的來改）</button></div>`;
+  h += `<div class="hint" style="margin:8px 2px 0">${O.shared ? `套用到所有沒有專屬選項的「${esc(O.type)}」店家` : `只套用到「${esc(O.type)}」`}，點餐時照這個順序顯示。「必選」的沒選就不能加入。</div>`;
+  return h + `${O.groups.map((g, gi) => `<div class="ecat">
     <div class="ecat-h"><input class="field" data-f="gname" data-gi="${gi}" maxlength="12" value="${esc(g.name)}" placeholder="選項組名稱，例如：甜度" aria-label="選項組名稱">
       <button class="mini" data-act="og-up" data-gi="${gi}" ${gi ? '' : 'disabled'} aria-label="上移">${I.up}</button><button class="mini" data-act="og-down" data-gi="${gi}" ${gi < O.groups.length - 1 ? '' : 'disabled'} aria-label="下移">${I.down}</button><button class="mini del" data-act="og-del" data-gi="${gi}" aria-label="刪除選項組">${I.x}</button></div>
     <div class="chips sm"><button class="chip ${g.multi ? '' : 'on'}" data-act="og-multi" data-gi="${gi}" data-v="0">單選</button><button class="chip ${g.multi ? 'on' : ''}" data-act="og-multi" data-gi="${gi}" data-v="1">可複選</button><button class="chip ${g.required ? 'on' : ''}" data-act="og-req" data-gi="${gi}">${g.required ? I.check : ''}必選</button></div>
@@ -1297,7 +1338,8 @@ function aOptionsHtml() {
       <label class="money-in"><span>+$</span><input data-f="add" inputmode="numeric" value="${esc(it.add)}" placeholder="0" aria-label="加價"></label><button class="mini del" data-act="oi-del" aria-label="刪除選項">${I.x}</button></div>`).join('')}
     <button class="addrow" data-act="oi-add" data-gi="${gi}">${I.plusSm}新增選項</button>
   </div>`).join('')}
-  <button class="btn ghost" style="width:100%;margin-top:12px" data-act="og-add">${I.plusSm}新增選項組</button>`;
+  <button class="btn ghost" style="width:100%;margin-top:12px" data-act="og-add">${I.plusSm}新增選項組</button>
+  ${O.shared ? '' : `<button class="btn ghost danger" style="width:100%;margin-top:28px" data-act="opt-revert">刪除專屬選項，改回用共用的</button>`}`;
 }
 async function saveOptions() {
   const O = S.opt, labels = new Set(), names = new Set();
@@ -1316,7 +1358,7 @@ async function saveOptions() {
   O.saving = true; renderBar();
   try {
     await api('saveOptions', { pin: PIN, type: O.type, groups: O.groups });
-    toast('已儲存' + O.type + '選項'); await refresh(); loadOpt(O.type); renderMain();
+    toast('已儲存「' + O.type + '」的選項'); await refresh(); loadOpt(O.type); renderMain();
   } catch (err) { toast(err.message || '沒有存到，再試一次'); O.saving = false; }
   renderBar();
 }
@@ -1381,7 +1423,7 @@ const ADMIN_ACT = {
     if (n && !(await confirmSheet('刪除分類', '「' + (c.name || '未命名') + '」裡的 ' + n + ' 個品項會一起刪除（按儲存後才生效）。', '刪除', true))) return;
     edChange(() => S.edit.cats.splice(+el.dataset.ci, 1));
   },
-  'ec-add': () => { edChange(() => S.edit.cats.push({ name: '', items: [blankItem()] })); focusLater(`[data-f="cat"][data-ci="${S.edit.cats.length - 1}"]`); },
+  'ec-add': () => { edChange(() => S.edit.cats.push({ name: '', sizes: ['M', 'L'], items: [blankItem()] })); focusLater(`[data-f="cat"][data-ci="${S.edit.cats.length - 1}"]`); },
   'ei-add': el => {
     const ci = +el.dataset.ci; edChange(() => S.edit.cats[ci].items.push(blankItem()));
     focusLater(`.erow[data-ci="${ci}"][data-ii="${S.edit.cats[ci].items.length - 1}"] [data-f="item"]`);
@@ -1399,6 +1441,17 @@ const ADMIN_ACT = {
     const v = el.dataset.v; if (v === S.opt.type) return;
     if (S.opt.dirty && !(await askDiscard())) return;
     loadOpt(v); renderMain(); renderBar();
+  },
+  'opt-own': () => {
+    const shop = S.data.shops.find(s => s.name === S.opt.type); if (!shop) return;
+    S.opt.groups = cloneGroups(groupOpts(shop.type)); S.opt.own = true; S.opt.dirty = true;
+    renderMain(); renderBar(); toast('已複製共用選項，改好後按儲存');
+  },
+  'opt-revert': async () => {
+    const key = S.opt.type;
+    if (!(await confirmSheet('改回共用選項', '「' + key + '」的專屬選項會刪除，之後點餐改用共用的那一套。', '改回共用', true))) return;
+    try { await api('saveOptions', { pin: PIN, type: key, groups: [] }); toast('已改回共用選項'); await refresh(); loadOpt(key); renderMain(); renderBar(); }
+    catch (err) { toast(err.message || '沒有成功，再試一次'); }
   },
   'og-up': el => edChange(() => swap(S.opt.groups, +el.dataset.gi, +el.dataset.gi - 1)),
   'og-down': el => edChange(() => swap(S.opt.groups, +el.dataset.gi, +el.dataset.gi + 1)),
@@ -1436,6 +1489,11 @@ document.addEventListener('input', e => {
     o = S.edit;
     if (f === 'name' || f === 'phone' || f === 'note') o.shop[f] = t.value;
     else if (f === 'cat') o.cats[+t.dataset.ci].name = t.value;
+    else if (f === 'sz0' || f === 'sz1') {
+      const ci = +t.dataset.ci, k = f === 'sz0' ? 0 : 1;
+      o.cats[ci].sizes[k] = t.value.replace(/\//g, '');
+      $$(`.erow[data-ci="${ci}"] .lab${k}`).forEach(s => { s.textContent = o.cats[ci].sizes[k]; });
+    }
     else { const r = rowOf(t); o.cats[r.ci].items[r.ii][f] = t.value; }
   } else if (S.view === 'admin' && S.adminTab === 'options' && S.opt) {
     o = S.opt;
