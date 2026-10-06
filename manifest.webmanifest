@@ -1,0 +1,16 @@
+{
+  "name": "揪團點餐",
+  "short_name": "揪團點餐",
+  "description": "便當、飲料一起點，截止自動統計，誰付了一目了然。",
+  "lang": "zh-TW",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#EDF1EA",
+  "theme_color": "#EDF1EA",
+  "icons": [
+    { "src": "assets/logo-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "assets/logo-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "assets/logo-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -4,7 +4,25 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>揪團點餐</title>
+<meta name="description" content="便當、飲料一起點，截止自動統計，誰付了一目了然。">
 <meta name="theme-color" content="#EDF1EA">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="揪團點餐">
+<meta property="og:title" content="揪團點餐">
+<meta property="og:description" content="便當、飲料一起點，截止自動統計，誰付了一目了然。">
+<meta property="og:url" content="https://a0955208683.github.io/lunch-order/">
+<meta property="og:image" content="https://a0955208683.github.io/lunch-order/assets/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:locale" content="zh_TW">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-64.png">
+<link rel="icon" type="image/png" sizes="192x192" href="assets/logo-192.png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-title" content="揪團點餐">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Huninn&family=Noto+Sans+TC:wght@400;500;700&display=swap">
@@ -64,6 +82,7 @@ svg{display:block;flex:none}
 .top.raised{box-shadow:0 1px 0 var(--line)}
 .hrow{display:flex;align-items:center;gap:10px}
 .hdate{font-size:13px;color:var(--muted);letter-spacing:.06em}
+.hlogo{width:52px;height:52px;flex:none;margin-left:-4px}
 .htitle{font-family:var(--f-display);font-weight:400;font-size:27px;line-height:1.2;margin:0;text-wrap:balance}
 .iconbtn{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:var(--surface);border:1px solid var(--line);flex:none}
 .meBtn{display:flex;align-items:center;gap:8px;height:40px;max-width:46%;padding:0 12px 0 4px;border-radius:999px;background:var(--surface);border:1px solid var(--line);font-weight:500;min-width:0}
@@ -755,6 +774,7 @@ function renderTop() {
   } else {
     top.innerHTML = `
       <div class="hrow">
+        <img class="hlogo" src="assets/logo-192.png" alt="" width="52" height="52">
         <div style="min-width:0"><div class="hdate num">${fmtDate(now())}</div><h1 class="htitle">今天揪什麼</h1></div>
         <span class="spacer"></span>
         <button class="iconbtn" data-act="admin" aria-label="管理">${I.tune}</button>
