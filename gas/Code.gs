@@ -1,4 +1,5 @@
 /**
+ * @OnlyCurrentDoc
  * 揪團點餐 — Google Apps Script 後端（含 LINE Bot）
  *
  * 試算表只當資料庫：店家、菜單、選項、成員、開團、訂單全部由網頁的「管理」維護。
