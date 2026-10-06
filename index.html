@@ -275,8 +275,9 @@ svg{display:block;flex:none}
 .chip.on small{color:var(--leaf)}
 .field{display:block;min-width:0;max-width:100%;font-size:16px;width:100%;height:46px;border-radius:12px;border:1.5px solid var(--line);background:var(--surface-2);padding:0 12px;outline:none}
 .field:focus{border-color:var(--leaf)}
-input[type=time].field{-webkit-appearance:none;appearance:none;text-align:left;line-height:46px}
-input[type=time].field::-webkit-date-and-time-value{text-align:left;margin:0}
+.tpick{display:flex;align-items:center;gap:8px}
+.tpick span{font-weight:700;color:var(--muted)}
+.tpick select.field{flex:1;min-width:0;-webkit-appearance:none;appearance:none;text-align:center;text-align-last:center;font-weight:500;cursor:pointer}
 textarea.field{height:auto;min-height:150px;padding:10px 12px;line-height:1.6;resize:vertical}
 .lbl{display:block;font-size:13.5px;font-weight:700;margin:16px 0 6px}
 .hint{font-size:12.5px;color:var(--muted);margin-top:5px}
@@ -1185,7 +1186,12 @@ function aOpenHtml() {
   return `<div class="panel">
     <label class="lbl" style="margin-top:0">店家</label>
     <div class="chips" id="ad-shops">${shops.map((s, i) => `<button class="chip ${i ? '' : 'on'}" data-act="pick" data-shop="${esc(s.name)}">${esc(s.name)} <small>${esc(s.type)}</small></button>`).join('')}</div>
-    <label class="lbl" for="ad-time">今天幾點截止</label><input class="field num" id="ad-time" type="time" value="${pad(d.getHours()) + ':' + pad(d.getMinutes())}">
+    <label class="lbl" for="ad-h">今天幾點截止</label>
+    <div class="tpick">
+      <select class="field num" id="ad-h" aria-label="時">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === d.getHours() ? 'selected' : ''}>${pad(h)} 點</option>`).join('')}</select>
+      <span>:</span>
+      <select class="field num" id="ad-m" aria-label="分">${Array.from({ length: 12 }, (_, i) => i * 5).map(m => `<option value="${m}" ${m === d.getMinutes() ? 'selected' : ''}>${pad(m)} 分</option>`).join('')}</select>
+    </div>
     <label class="lbl" for="ad-note">給大家的話</label><input class="field" id="ad-note" maxlength="80" placeholder="選填，例如：今天老闆加送滷蛋">
     <button class="btn" style="margin-top:20px;width:100%" data-act="do-open">開團</button>
   </div>`;
@@ -1418,9 +1424,9 @@ const ADMIN_ACT = {
   },
   pick: el => $$('.chip', el.parentElement).forEach(c => c.classList.toggle('on', c === el)),
   'do-open': async el => {
-    const shop = $('#ad-shops .on').dataset.shop, tv = $('#ad-time').value;
-    if (!tv) return toast('請選截止時間');
-    const d = new Date(); d.setHours(+tv.slice(0, 2), +tv.slice(3, 5), 0, 0);
+    const shop = $('#ad-shops .on').dataset.shop;
+    const d = new Date(); d.setHours(+$('#ad-h').value, +$('#ad-m').value, 0, 0);
+    if (d.getTime() <= now()) return toast('這個時間已經過了，請選晚一點');
     el.disabled = true;
     try {
       const r = await api('openGroup', { pin: PIN, shop, deadline: d.getTime(), note: $('#ad-note').value.trim() });
