@@ -352,7 +352,7 @@ function relevantGroups_(d) {
 }
 
 function statsMsgs_() {
-  const d = JSON.parse(bootstrapJson_());
+  const d = lineData_();
   const gs = relevantGroups_(d);
   if (!gs.length) return [{ type: 'text', text: '今天還沒有開團。' }];
   return [flexOf_(gs, d)];
@@ -368,7 +368,7 @@ function flexOf_(gs, d) {
 }
 
 function unpaidMsgs_() {
-  const d = JSON.parse(bootstrapJson_());
+  const d = lineData_();
   const gs = relevantGroups_(d);
   if (!gs.length) return [{ type: 'text', text: '今天還沒有開團。' }];
   const parts = gs.map(g => {
@@ -548,18 +548,107 @@ function checkDeadlines() {
   if (prop_('PUSH_ON_DEADLINE') !== 'true') return;
   const to = prop_('LINE_GROUP_ID');
   if (!to || !prop_('LINE_TOKEN')) return;
-  const sh = sheet_('groups'), v = sh.getDataRange().getValues(), t = Date.now();
-  let d = null;
-  for (let i = 1; i < v.length; i++) {
-    const r = v[i], dl = ms_(r[2]);
-    if (!r[0] || r[6] || String(r[3]).trim() === ST_CLOSED) continue;
-    if (dl > t || t - dl > 3600e3) continue;          // 只推剛截止一小時內的
-    d = d || JSON.parse(bootstrapJson_());
-    const g = d.groups.filter(x => x.id === String(r[0]))[0];
-    if (!g) continue;
+  const d = lineData_(), t = Date.now();
+  d.groups.forEach(g => {
+    if (g.status !== 'open' || g.pushedAt || g.deadline > t || t - g.deadline > 3600e3) return;   // 只推剛截止一小時內的
     push_(to, [{ type: 'text', text: '【' + g.shop + '】截止囉，統計如下：' }, flexOf_([g], d)]);
-    sh.getRange(i + 1, 7).setValue(new Date());
-  }
+    if (DATA_SOURCE === 'firebase') fsPatch_('groups/' + g.id, { pushedAt: t });
+  });
+}
+
+/* ================= Firebase（Firestore）：網頁的資料都放在這裡，LINE Bot 從這裡讀 ================= */
+
+// 'firebase' = 讀 Firestore（新）；'sheet' = 讀試算表（舊）
+const DATA_SOURCE = 'firebase';
+const FB = { project: 'jiutuan-order', key: 'AIzaSyDRvhglm1In1NWISq0vvnVjSX1jzXrnFhQ' };
+const FS_BASE = 'https://firestore.googleapis.com/v1/projects/' + FB.project + '/databases/(default)/documents';
+
+function lineData_() { return DATA_SOURCE === 'firebase' ? fsAll_(Date.now() - KEEP_DAYS * 864e5) : JSON.parse(bootstrapJson_()); }
+
+// Firestore REST 的值 → 一般的 JS 值
+function fsVal_(v) {
+  if (!v) return null;
+  if ('stringValue' in v) return v.stringValue;
+  if ('integerValue' in v) return +v.integerValue;
+  if ('doubleValue' in v) return +v.doubleValue;
+  if ('booleanValue' in v) return v.booleanValue;
+  if ('nullValue' in v) return null;
+  if ('timestampValue' in v) return new Date(v.timestampValue).getTime();
+  if ('arrayValue' in v) return (v.arrayValue.values || []).map(fsVal_);
+  if ('mapValue' in v) { const o = {}, f = v.mapValue.fields || {}; Object.keys(f).forEach(k => { o[k] = fsVal_(f[k]); }); return o; }
+  return null;
+}
+function fsDoc_(d) { const o = fsVal_({ mapValue: { fields: d.fields || {} } }); o._id = d.name.split('/').pop(); return o; }
+function fsFetch_(url, opt) {
+  const r = UrlFetchApp.fetch(url + (url.indexOf('?') < 0 ? '?' : '&') + 'key=' + FB.key, Object.assign({ muteHttpExceptions: true }, opt || {}));
+  if (r.getResponseCode() !== 200) throw new Error('Firestore ' + r.getResponseCode() + ' ' + r.getContentText().slice(0, 200));
+  return JSON.parse(r.getContentText());
+}
+function fsList_(col) {
+  let out = [], token = '';
+  do {
+    const j = fsFetch_(FS_BASE + '/' + col + '?pageSize=300' + (token ? '&pageToken=' + encodeURIComponent(token) : ''));
+    out = out.concat((j.documents || []).map(fsDoc_)); token = j.nextPageToken || '';
+  } while (token);
+  return out;
+}
+function fsQuery_(col, field, op, value) {
+  const q = { structuredQuery: { from: [{ collectionId: col }], where: { fieldFilter: { field: { fieldPath: field }, op: op, value: { integerValue: String(Math.round(value)) } } } } };
+  const j = fsFetch_(FS_BASE + ':runQuery', { method: 'post', contentType: 'application/json', payload: JSON.stringify(q) });
+  return j.filter(x => x.document).map(x => fsDoc_(x.document));
+}
+function fsPatch_(path, fields) {
+  const f = {}, mask = Object.keys(fields).map(k => 'updateMask.fieldPaths=' + k).join('&');
+  Object.keys(fields).forEach(k => { f[k] = typeof fields[k] === 'number' ? { integerValue: String(fields[k]) } : { stringValue: String(fields[k]) }; });
+  fsFetch_(FS_BASE + '/' + path + '?' + mask, { method: 'patch', contentType: 'application/json', payload: JSON.stringify({ fields: f }) });
+}
+// 組成跟舊版 readAll_() 一樣的形狀，LINE 的統計程式不用改；since = 0 代表全部（備份用）
+function fsAll_(since) {
+  const shops = fsList_('shops').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  const meta = (fsList_('meta').filter(x => x._id === 'app')[0]) || { members: [], options: [] };
+  const groups = (since ? fsQuery_('groups', 'deadline', 'GREATER_THAN', since) : fsList_('groups')).map(g => ({
+    id: g._id, shop: g.shop, deadline: g.deadline, status: g.status === 'closed' ? 'closed' : 'open',
+    note: g.note || '', createdAt: g.createdAt || 0, promos: g.promos || [], pushedAt: g.pushedAt || 0,
+  }));
+  const orders = (since ? fsQuery_('orders', 'gdl', 'GREATER_THAN', since) : fsList_('orders'))
+    .filter(o => o.lines && o.lines.length)
+    .map(o => ({ groupId: o.groupId, name: o.name, total: o.total || 0, paid: o.paid || 0, updatedAt: o.updatedAt || 0, lines: o.lines }));
+  return {
+    shops: shops.map(s => ({ name: s.name, type: s.type, phone: s.phone || '', note: s.note || '', disabled: !!s.disabled })),
+    menu: [].concat.apply([], shops.map(s => (s.menu || []).map(m => Object.assign({ shop: s.name }, m)))),
+    options: meta.options || [], members: meta.members || [], groups: groups, orders: orders,
+  };
+}
+
+/** 把 Firebase 的資料備份到試算表（寫到「備份_」開頭的分頁，不動原本的分頁）。可以手動執行，也可以每天自動跑 */
+function backupToSheet() {
+  const d = fsAll_(0), ss = ss_(), when = Utilities.formatDate(new Date(), TZ, 'yyyy/MM/dd HH:mm');
+  const dups = {}; d.shops.forEach(s => { dups[s.name] = dupNames_(d.menu.filter(m => m.shop === s.name)); });
+  const shopOf = id => (d.groups.filter(g => g.id === id)[0] || {}).shop || '';
+  const tabs = {
+    '備份_店家': [['店名', '類型', '電話', '備註', '停用']].concat(d.shops.map(s => [s.name, s.type, s.phone, s.note, s.disabled ? 'Y' : ''])),
+    '備份_菜單': [['店名', '分類', '品名', '價格', '第二份量價', '說明', '份量名稱', '優惠']].concat(d.menu.map(m => [m.shop, m.cat, m.item, m.price, m.priceL || '', m.desc || '', m.sizes || '', m.disc || ''])),
+    '備份_開團': [['團ID', '店名', '截止時間', '狀態', '備註']].concat(d.groups.sort((a, b) => b.deadline - a.deadline).map(g => [g.id, g.shop, new Date(g.deadline), g.status === 'closed' ? ST_CLOSED : ST_OPEN, g.note])),
+    '備份_訂單': [['團ID', '店名', '截止時間', '姓名', '內容', '金額', '已付金額']].concat(d.orders.map(o => {
+      const g = d.groups.filter(x => x.id === o.groupId)[0] || {};
+      return [o.groupId, shopOf(o.groupId), g.deadline ? new Date(g.deadline) : '', o.name, linesText_(o.lines, dups[g.shop] || {}), o.total, o.paid || ''];
+    })),
+    '備份_成員': [['姓名']].concat(d.members.map(n => [n])),
+  };
+  Object.keys(tabs).forEach(name => {
+    const rows = tabs[name];
+    let sh = ss.getSheetByName(name); if (!sh) sh = ss.insertSheet(name);
+    sh.clearContents();
+    sh.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
+    sh.getRange(1, 1, 1, rows[0].length).setFontWeight('bold').setBackground('#DDEFE3');
+    sh.setFrozenRows(1);
+    sh.getRange(1, rows[0].length + 2).setValue('最後備份：' + when);
+  });
+}
+/** 執行一次：每天晚上 11 點自動備份到試算表 */
+function installBackupTrigger() {
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'backupToSheet').forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('backupToSheet').timeBased().everyDays(1).atHour(23).create();
 }
 
 /* ================= 安裝 ================= */

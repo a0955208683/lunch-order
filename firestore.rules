@@ -1,0 +1,55 @@
+rules_version = '2';
+// 揪團點餐 Firestore 規則
+// 大家都能讀；截止後不能改單（截止前按下的寬限 3 分鐘）；收款標記不受截止限制
+service cloud.firestore {
+  match /databases/{db}/documents {
+
+    function str(v, n) { return v is string && v.size() <= n; }
+    function nowMs() { return request.time.toMillis(); }
+    function groupAfter(gid) { return getAfter(/databases/$(db)/documents/groups/$(gid)).data; }
+    function inTime(g, at) {
+      return g.status == 'open' && (nowMs() < g.deadline || (at < g.deadline && nowMs() < g.deadline + 180000));
+    }
+
+    // 成員名單、選項
+    match /meta/{id} {
+      allow read: if true;
+      allow write: if id == 'app'
+        && request.resource.data.members is list && request.resource.data.members.size() <= 100
+        && request.resource.data.options is list && request.resource.data.options.size() <= 500;
+    }
+
+    // 店家（含菜單）
+    match /shops/{id} {
+      allow read: if true;
+      allow create, update: if str(request.resource.data.name, 30)
+        && request.resource.data.type in ['便當', '飲料']
+        && request.resource.data.menu is list && request.resource.data.menu.size() <= 200;
+      allow delete: if true;
+    }
+
+    // 團
+    match /groups/{id} {
+      allow read: if true;
+      allow create, update: if str(request.resource.data.shop, 30)
+        && request.resource.data.deadline is number
+        && request.resource.data.status in ['open', 'closed'];
+      allow delete: if true;
+    }
+
+    // 訂單：一個人在一團一筆（文件 ID = 團ID__名字）
+    match /orders/{id} {
+      allow read: if true;
+      allow create: if str(request.resource.data.name, 20)
+        && request.resource.data.lines is list && request.resource.data.lines.size() <= 30
+        && exists(/databases/$(db)/documents/groups/$(request.resource.data.groupId))
+        && inTime(groupAfter(request.resource.data.groupId), request.resource.data.at);
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paid'])
+        || (request.resource.data.lines is list && request.resource.data.lines.size() <= 30
+            && inTime(groupAfter(request.resource.data.groupId), request.resource.data.at));
+      // 自己清空訂單（截止前），或整團被刪掉時一起刪
+      allow delete: if !existsAfter(/databases/$(db)/documents/groups/$(resource.data.groupId))
+        || inTime(groupAfter(resource.data.groupId), nowMs());
+    }
+  }
+}

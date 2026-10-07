@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>揪團點餐｜搬家工具</title>
+<style>
+:root{--bg:#EDF1EA;--surface:#fff;--ink:#16231B;--muted:#5D6D63;--leaf:#1E7A4C;--line:#D7DFD5;--chili:#CF4128}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Noto Sans TC",-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;line-height:1.7}
+main{max-width:640px;margin:0 auto;padding:32px 16px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px}
+h1{font-size:22px;margin:0 0 8px}
+p{color:var(--muted);margin:4px 0}
+button{font:inherit;font-weight:700;border:0;border-radius:12px;background:var(--leaf);color:#fff;height:48px;padding:0 22px;margin-top:16px;cursor:pointer}
+button:disabled{opacity:.5}
+pre{white-space:pre-wrap;background:#F4F7F2;border-radius:10px;padding:12px;font-size:13px;margin-top:16px;min-height:60px}
+.err{color:var(--chili)}
+</style>
+</head>
+<body>
+<main><div class="card">
+  <h1>搬家：試算表 → Firebase</h1>
+  <p>把舊系統（Google 試算表）裡的店家、菜單、選項、成員複製到 Firebase。只是複製，不會改動試算表。</p>
+  <p>開過的團和訂單不搬（只是歷史紀錄，還留在試算表裡）。</p>
+  <button id="go">開始搬家</button>
+  <pre id="log">按上面的按鈕開始。</pre>
+</div></main>
+<script type="module">
+const API_URL = 'https://script.google.com/macros/s/AKfycbz1JWHCvcu4qtIPlweQ9V2feZZwtIv46TUJH237UPkpJAMPtrU5C2TXfj8pWQKmBxU_tg/exec';
+const CFG = {
+  apiKey: 'AIzaSyDRvhglm1In1NWISq0vvnVjSX1jzXrnFhQ', authDomain: 'jiutuan-order.firebaseapp.com', projectId: 'jiutuan-order',
+  storageBucket: 'jiutuan-order.firebasestorage.app', messagingSenderId: '69078170494', appId: '1:69078170494:web:3ee7ac044bdc0dd9fbd12f',
+};
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js';
+import { getFirestore, collection, doc, getDocs, writeBatch } from 'https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js';
+const db = getFirestore(initializeApp(CFG));
+const log = (t, bad) => { const el = document.getElementById('log'); el.textContent += '\n' + t; if (bad) el.classList.add('err'); };
+const num = v => Math.max(0, Math.round(+v || 0));
+
+document.getElementById('go').addEventListener('click', async e => {
+  const btn = e.target; btn.disabled = true;
+  document.getElementById('log').textContent = '開始…';
+  try {
+    const existing = await getDocs(collection(db, 'shops'));
+    if (!existing.empty) { log('Firebase 裡已經有 ' + existing.size + ' 家店了，為了避免重複，不再搬。', true); return; }
+    log('讀取舊系統資料…（可能要幾秒到十幾秒）');
+    const d = await (await fetch(API_URL + '?action=bootstrap&t=' + Date.now())).json();
+    if (!d.shops) throw new Error('讀不到舊系統資料');
+    const b = writeBatch(db), base = Date.now();
+    d.shops.forEach((s, i) => {
+      const menu = (d.menu || []).filter(m => m.shop === s.name).map(m => ({
+        cat: String(m.cat || '其他'), item: String(m.item), price: num(m.price), priceL: num(m.priceL),
+        desc: String(m.desc || ''), sizes: num(m.priceL) ? String(m.sizes || '') : '', disc: String(m.disc || ''),
+      }));
+      b.set(doc(collection(db, 'shops')), { name: s.name, type: s.type === '飲料' ? '飲料' : '便當', phone: String(s.phone || ''), note: String(s.note || ''), disabled: !!s.disabled, menu, createdAt: base + i, updatedAt: base });
+      log('店家：' + s.name + '（' + menu.length + ' 個品項）');
+    });
+    const options = (d.options || []).map(o => ({ type: String(o.type), group: String(o.group), label: String(o.label), add: num(o.add), multi: !!o.multi, required: !!o.required }));
+    b.set(doc(db, 'meta', 'app'), { members: (d.members || []).map(String), options, updatedAt: base, migratedAt: base });
+    log('選項：' + options.length + ' 個；成員：' + (d.members || []).length + ' 人');
+    await b.commit();
+    log('✓ 搬家完成');
+  } catch (err) { log('沒有成功：' + (err.message || err), true); }
+  finally { btn.disabled = false; }
+});
+</script>
+</body>
+</html>

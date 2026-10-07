@@ -457,12 +457,23 @@ textarea.field{height:auto;min-height:150px;padding:10px 12px;line-height:1.6;re
 'use strict';
 /* ================= 設定 ================= */
 const CONFIG = {
-  // 部署 Apps Script 後，把「網頁應用程式網址」貼在這裡。留空 = 試用模式（範例資料，只存在這支手機）
+  // 資料放哪裡：'firebase'（Firestore，即時、快）、'sheet'（舊的 Apps Script＋試算表）、'demo'（試用，範例資料只存在這支手機）
+  BACKEND: 'firebase',
+  FIREBASE: {
+    apiKey: 'AIzaSyDRvhglm1In1NWISq0vvnVjSX1jzXrnFhQ',
+    authDomain: 'jiutuan-order.firebaseapp.com',
+    projectId: 'jiutuan-order',
+    storageBucket: 'jiutuan-order.firebasestorage.app',
+    messagingSenderId: '69078170494',
+    appId: '1:69078170494:web:3ee7ac044bdc0dd9fbd12f',
+  },
+  // 舊後端（Apps Script）網址；LINE Bot 也還在這裡
   API_URL: 'https://script.google.com/macros/s/AKfycbz1JWHCvcu4qtIPlweQ9V2feZZwtIv46TUJH237UPkpJAMPtrU5C2TXfj8pWQKmBxU_tg/exec',
   POLL_MS: 15000,
 };
 const PIN = '2750';
-const DEMO = !CONFIG.API_URL;
+const DEMO = CONFIG.BACKEND === 'demo' || (CONFIG.BACKEND === 'sheet' && !CONFIG.API_URL);
+const FIRE = CONFIG.BACKEND === 'firebase';
 
 /* ================= 工具 ================= */
 const $ = (s, r = document) => r.querySelector(s);
@@ -780,6 +791,7 @@ async function api(action, payload = {}) {
 }
 async function apiOnce(action, payload) {
   if (DEMO) return Mock.call(action, payload);
+  if (FIRE) return Fire.call(action, payload);
   const res = action === 'bootstrap'
     ? await fetch(CONFIG.API_URL + '?action=bootstrap&t=' + now())
     : await fetch(CONFIG.API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ action }, payload)) });
@@ -789,8 +801,151 @@ async function apiOnce(action, payload) {
   return j;
 }
 
+/* ================= Firebase（Firestore）後端 =================
+   資料：shops/{id}（店家＋整份菜單）、meta/app（成員、選項）、groups/{團ID}、orders/{團ID__名字}
+   一個人在一團只有一筆訂單文件，大家各寫各的，不會互相蓋掉；截止時間由 Firestore 規則把關 */
+const Fire = (() => {
+  const V = '11.0.2', BASE = 'https://www.gstatic.com/firebasejs/' + V + '/';
+  let db = null, fs = null, ready = null;
+  const raw = { shops: null, meta: null, groups: null, orders: null };
+  const init = () => ready || (ready = (async () => {
+    const [appMod, fsMod] = await Promise.all([import(BASE + 'firebase-app.js'), import(BASE + 'firebase-firestore.js')]);
+    fs = fsMod;
+    const app = appMod.initializeApp(CONFIG.FIREBASE);
+    // 存在手機的快取：斷網時還能看、寫入會排隊，連上後自動送出
+    try { db = fs.initializeFirestore(app, { localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }) }); }
+    catch (e) { db = fs.getFirestore(app); }
+  })());
+  const oid = (gid, name) => gid + '__' + String(name).replace(/\//g, '／');
+  const nameOf = s => String(s || '').trim();
+  // 把 Firestore 的資料組成跟舊後端一樣的形狀，畫面不用改
+  function view() {
+    const shops = raw.shops.slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    return {
+      shops: shops.map(s => ({ name: s.name, type: s.type, phone: s.phone || '', note: s.note || '', disabled: !!s.disabled })),
+      menu: shops.flatMap(s => (s.menu || []).map(m => Object.assign({ shop: s.name }, m))),
+      options: raw.meta.options || [], members: raw.meta.members || [],
+      groups: raw.groups.map(g => ({ id: g.id, shop: g.shop, deadline: g.deadline, status: g.status, note: g.note || '', createdAt: g.createdAt || 0, promos: g.promos || [] })),
+      orders: raw.orders.map(o => ({ groupId: o.groupId, name: o.name, lines: o.lines || [], total: o.total || 0, paid: o.paid || 0, updatedAt: o.updatedAt || 0 })),
+    };
+  }
+  let markLoaded; const loaded = new Promise(r => { markLoaded = r; });
+  function emit() { if (Object.values(raw).every(v => v !== null)) { applyData(view()); markLoaded(); } }
+  function onErr(e) { console.warn('Firestore', e); if (!S.loaded) { S.loadErr = e; render(); } }
+  async function subscribe() {
+    await init();
+    const cutoff = now() - 3 * 864e5, C = n => fs.collection(db, n);
+    fs.onSnapshot(C('shops'), s => { raw.shops = s.docs.map(d => Object.assign({ id: d.id }, d.data())); emit(); }, onErr);
+    fs.onSnapshot(fs.doc(db, 'meta', 'app'), s => { raw.meta = s.exists() ? s.data() : { members: [], options: [] }; emit(); }, onErr);
+    fs.onSnapshot(fs.query(C('groups'), fs.where('deadline', '>', cutoff)), s => { raw.groups = s.docs.map(d => Object.assign({ id: d.id }, d.data())); emit(); }, onErr);
+    fs.onSnapshot(fs.query(C('orders'), fs.where('gdl', '>', cutoff)), s => { raw.orders = s.docs.map(d => d.data()); emit(); }, onErr);
+  }
+  const need = p => { if (String(p.pin) !== PIN) throw apiErr('PIN', 'PIN 碼不對'); };
+  const shopDoc = name => raw.shops.find(s => s.name === name);
+  const groupOf = id => raw.groups.find(g => g.id === id);
+  async function metaUpdate(fn) {       // 成員、選項：讀出最新的再改，避免兩個人同時改互蓋
+    const ref = fs.doc(db, 'meta', 'app');
+    await fs.runTransaction(db, async t => {
+      const s = await t.get(ref), m = s.exists() ? s.data() : { members: [], options: [] };
+      const next = fn({ members: m.members || [], options: m.options || [] });
+      t.set(ref, { members: next.members, options: next.options, updatedAt: now() });
+    });
+  }
+  const H = {
+    async saveOrder(p) {
+      const g = groupOf(p.groupId); if (!g) throw apiErr('NOGROUP', '找不到這一團');
+      const name = nameOf(p.name).slice(0, 20); if (!name) throw apiErr('NONAME', '請先填名字');
+      const lines = cleanLines(p.lines);
+      // 清空也用「寫入空的單」，不刪文件：規則比較單純，也不會因為文件不存在而失敗
+      await fs.setDoc(fs.doc(db, 'orders', oid(g.id, name)),
+        { groupId: g.id, name, lines, total: sumAmt(lines), updatedAt: now(), at: Math.min(+p.at || now(), now()), gdl: g.deadline }, { merge: true });
+      return { ok: true };
+    },
+    async setPaid(p) {
+      need(p);
+      const o = raw.orders.find(x => x.groupId === p.groupId && x.name === p.name); if (!o) throw apiErr('NOORDER', '找不到這筆訂單');
+      await fs.updateDoc(fs.doc(db, 'orders', oid(p.groupId, p.name)), { paid: p.paid ? (o.total || 0) : 0 });
+      return { ok: true };
+    },
+    async openGroup(p) {
+      need(p);
+      const s = shopDoc(p.shop); if (!s || s.disabled) throw apiErr('NOSHOP', '找不到這家店，或這家店暫停使用中');
+      if (+p.deadline <= now()) throw apiErr('BADTIME', '截止時間已經過了');
+      const id = 'g' + Math.random().toString(36).slice(2, 9);
+      await fs.setDoc(fs.doc(db, 'groups', id), {
+        shop: s.name, deadline: +p.deadline, status: 'open', note: String(p.note || '').slice(0, 80), createdAt: now(),
+        promos: cleanPromos(p.promos, (s.menu || []).map(m => Object.assign({ shop: s.name }, m))), pushedAt: 0,
+      });
+      return { ok: true, id };
+    },
+    async closeGroup(p) { need(p); await fs.updateDoc(fs.doc(db, 'groups', p.groupId), { status: 'closed' }); return { ok: true }; },
+    async extendGroup(p) {
+      need(p); const g = groupOf(p.groupId); if (!g) throw apiErr('NOGROUP', '找不到這一團');
+      await fs.updateDoc(fs.doc(db, 'groups', g.id), { status: 'open', deadline: Math.max(now(), g.deadline) + Math.min(240, +p.minutes || 15) * 60e3, pushedAt: 0 });
+      return { ok: true };
+    },
+    async deleteGroup(p) {
+      need(p);
+      const os = await fs.getDocs(fs.query(fs.collection(db, 'orders'), fs.where('groupId', '==', p.groupId)));
+      const b = fs.writeBatch(db);
+      b.delete(fs.doc(db, 'groups', p.groupId)); os.docs.forEach(d => b.delete(d.ref));
+      await b.commit(); return { ok: true };
+    },
+    async saveShop(p) {
+      need(p);
+      const sh = p.shop || {}, name = nameOf(sh.name).slice(0, 30), orig = p.orig || null;
+      if (!name) throw apiErr('BAD', '請填店名');
+      if (raw.shops.some(x => x.name === name && x.name !== orig)) throw apiErr('DUP', '已經有「' + name + '」了');
+      const type = sh.type === '飲料' ? '飲料' : '便當', menu = cleanItems(p.items, type);
+      if (!menu.length) throw apiErr('BAD', '菜單至少要有一個品項');
+      const cur = orig ? shopDoc(orig) : null; if (orig && !cur) throw apiErr('NOSHOP', '找不到「' + orig + '」');
+      const data = { name, type, phone: String(sh.phone || '').slice(0, 30), note: String(sh.note || '').slice(0, 60), disabled: !!sh.disabled, menu, createdAt: cur ? (cur.createdAt || now()) : now(), updatedAt: now() };
+      const b = fs.writeBatch(db);
+      b.set(cur ? fs.doc(db, 'shops', cur.id) : fs.doc(fs.collection(db, 'shops')), data);
+      if (orig && orig !== name) {      // 改店名：開過的團一起改，菜單才對得上
+        const gs = await fs.getDocs(fs.query(fs.collection(db, 'groups'), fs.where('shop', '==', orig)));
+        gs.docs.forEach(d => b.update(d.ref, { shop: name }));
+      }
+      await b.commit();
+      if (orig && orig !== name) await metaUpdate(m => ({ members: m.members, options: m.options.map(o => o.type === orig ? Object.assign({}, o, { type: name }) : o) }));
+      return { ok: true };
+    },
+    async deleteShop(p) {
+      need(p);
+      const s = shopDoc(p.name); if (!s) return { ok: true };
+      if (raw.groups.some(g => g.shop === p.name && g.status === 'open' && g.deadline > now())) throw apiErr('BUSY_SHOP', '這家店還有進行中的團，先結單再刪除');
+      await fs.deleteDoc(fs.doc(db, 'shops', s.id));
+      await metaUpdate(m => ({ members: m.members, options: m.options.filter(o => o.type !== p.name) }));
+      return { ok: true };
+    },
+    async saveOptions(p) {
+      need(p);
+      const type = String(p.type || '');
+      if (type !== '便當' && type !== '飲料' && !shopDoc(type)) throw apiErr('NOSHOP', '找不到「' + type + '」');
+      const rows = cleanOptions(p.groups).flatMap(g => g.items.map(i => ({ type, group: g.name, label: i.label, add: i.add, multi: g.multi, required: g.required })));
+      await metaUpdate(m => ({ members: m.members, options: m.options.filter(o => o.type !== type).concat(rows) }));
+      return { ok: true };
+    },
+    async saveMembers(p) { need(p); const list = cleanMembers(p.members); await metaUpdate(m => ({ members: list, options: m.options })); return { ok: true }; },
+  };
+  return {
+    subscribe,
+    async call(action, p = {}) {
+      if (action === 'bootstrap') return null;            // 資料由即時監聽推送，不用另外抓
+      await init(); await loaded;                          // 資料第一次到齊前先等，避免誤判「找不到這一團」
+      if (!H[action]) throw apiErr('NOACTION', '未知的動作');
+      try { return await H[action](p); }
+      catch (e) {
+        if (e.code === 'permission-denied') throw apiErr(action === 'saveOrder' ? 'CLOSED' : 'DENIED', action === 'saveOrder' ? '這一團已截止' : '沒有權限做這件事');
+        if (typeof e.code === 'string' && /^[A-Z_]+$/.test(e.code)) throw e;   // 我們自己丟的錯誤
+        throw new Error(e.message || '連線失敗');                              // 網路類：可以重試
+      }
+    },
+  };
+})();
+
 /* ================= 狀態 ================= */
-const CACHE_KEY = DEMO ? 'jt_cache_demo' : 'jt_cache';
+const CACHE_KEY = DEMO ? 'jt_cache_demo' : FIRE ? 'jt_cache_fb' : 'jt_cache';
 const S = {
   data: { shops: [], menu: [], options: [], members: [], groups: [], orders: [] },
   me: store.get('jt_me', ''),
@@ -871,12 +1026,13 @@ function applyData(d, fromCache) {
   if (first && !S.me && !S.sheet) askName();
 }
 async function refresh() {
+  if (FIRE) return sleep(60);           // Firebase：資料即時推送，這裡只等畫面跟上
   try { applyData(await api('bootstrap')); }
   catch (e) { if (!S.loaded) { S.loadErr = e; render(); } }
 }
 /* 點餐儲存：一按就改畫面、記在手機（outbox），停手 0.45 秒後送出；
    伺服器忙或網路斷就一直重試到成功；網頁被關掉的話，下次打開自動補送 */
-const OUTBOX_KEY = DEMO ? 'jt_outbox_demo' : 'jt_outbox';
+const OUTBOX_KEY = DEMO ? 'jt_outbox_demo' : FIRE ? 'jt_outbox_fb' : 'jt_outbox';
 const outbox = () => store.get(OUTBOX_KEY, {}) || {};
 function outboxPut(gid, x) { const o = outbox(); o[gid] = x; store.set(OUTBOX_KEY, o); }
 function outboxDel(gid) { const o = outbox(); if (o[gid]) { delete o[gid]; store.set(OUTBOX_KEY, o); } }
@@ -2230,7 +2386,8 @@ window.addEventListener('pagehide', flushAll);
   restoreOutbox();                 // 上次沒送出的單先放回畫面並補送
   route();
   if (cached) applyData(cached, true);
-  refresh();
+  if (FIRE) Fire.subscribe().catch(e => { if (!S.loaded) { S.loadErr = e; render(); } });
+  else refresh();
 })();
 </script>
 </body>
