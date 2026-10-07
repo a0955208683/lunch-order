@@ -431,6 +431,8 @@ textarea.field{height:auto;min-height:150px;padding:10px 12px;line-height:1.6;re
 .busy-in{display:flex;align-items:center;gap:12px;background:var(--ink);color:var(--bg);padding:14px 20px;border-radius:16px;font-weight:500;font-size:15px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
 .spin{width:20px;height:20px;border:2.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite;flex:none}
 @keyframes spin{to{transform:rotate(360deg)}}
+.spin.sm{display:inline-block;width:11px;height:11px;border-width:2px;margin-right:2px;vertical-align:-1px}
+.pend{flex:none;font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:4px}
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{transition:none!important;animation:none!important}
   .spin{animation:spin 1.6s linear infinite!important}
@@ -688,7 +690,8 @@ const Mock = (() => {
     },
     saveOrder(d, p) {
       const g = grp(d, p.groupId);
-      if (!(g.status === 'open' && now() < g.deadline)) throw apiErr('CLOSED', '這一團已截止');
+      const t = now(), at = Math.min(+p.at || t, t);
+      if (!(g.status === 'open' && (t < g.deadline || (at < g.deadline && t < g.deadline + 3 * 60e3)))) throw apiErr('CLOSED', '這一團已截止');
       const name = String(p.name || '').trim(); if (!name) throw apiErr('NONAME', '請先填名字');
       const lines = cleanLines(p.lines);
       const o = d.orders.find(x => x.groupId === g.id && x.name === name);
@@ -768,7 +771,14 @@ const Mock = (() => {
   };
 })();
 
+// 管理操作遇到伺服器忙碌（BUSY）自動再試幾次；點餐儲存由 flush 自己一直重試
 async function api(action, payload = {}) {
+  for (let i = 0; ; i++) {
+    try { return await apiOnce(action, payload); }
+    catch (e) { if (e.code !== 'BUSY' || action === 'saveOrder' || i >= 4) throw e; await sleep(2000); }
+  }
+}
+async function apiOnce(action, payload) {
   if (DEMO) return Mock.call(action, payload);
   const res = action === 'bootstrap'
     ? await fetch(CONFIG.API_URL + '?action=bootstrap&t=' + now())
@@ -785,7 +795,7 @@ const S = {
   data: { shops: [], menu: [], options: [], members: [], groups: [], orders: [] },
   me: store.get('jt_me', ''),
   view: 'home', gid: null, tab: 'menu', loaded: false, loadErr: null, sig: '',
-  pending: {}, ver: {}, saveState: {}, timers: {},
+  pending: {}, ver: {}, saveState: {}, timers: {}, at: {}, tries: {}, inflight: {},
   pinOk: false, collecting: false, unpaidOnly: false, adminTab: 'open',
   edit: null, opt: null, mem: null, guardSkip: false,
   sheet: null, sheetOnClose: null, sheetLocked: false,
@@ -864,6 +874,13 @@ async function refresh() {
   try { applyData(await api('bootstrap')); }
   catch (e) { if (!S.loaded) { S.loadErr = e; render(); } }
 }
+/* 點餐儲存：一按就改畫面、記在手機（outbox），停手 0.45 秒後送出；
+   伺服器忙或網路斷就一直重試到成功；網頁被關掉的話，下次打開自動補送 */
+const OUTBOX_KEY = DEMO ? 'jt_outbox_demo' : 'jt_outbox';
+const outbox = () => store.get(OUTBOX_KEY, {}) || {};
+function outboxPut(gid, x) { const o = outbox(); o[gid] = x; store.set(OUTBOX_KEY, o); }
+function outboxDel(gid) { const o = outbox(); if (o[gid]) { delete o[gid]; store.set(OUTBOX_KEY, o); } }
+const transient = e => !e.code || e.code === 'BUSY';     // 這兩種等一下再試就會好
 function setMine(gid, lines) {
   lines = lines.filter(l => l.qty > 0);
   let o = myOrder(gid);
@@ -872,30 +889,61 @@ function setMine(gid, lines) {
     if (!o) { o = { groupId: gid, name: S.me, paid: 0, lines: [], total: 0 }; S.data.orders.push(o); }
     o.lines = lines; o.total = sumAmt(lines); o.updatedAt = now();
   }
-  S.sig = ''; S.pending[gid] = true; S.ver[gid] = (S.ver[gid] || 0) + 1; S.saveState[gid] = 'saving';
+  S.at[gid] = now();                                     // 按下去的時間：截止前按的就算數
+  outboxPut(gid, { name: S.me, lines, at: S.at[gid] });
+  S.sig = ''; S.pending[gid] = true; S.ver[gid] = (S.ver[gid] || 0) + 1; S.tries[gid] = 0;
+  if (S.saveState[gid] !== 'retry') S.saveState[gid] = 'saving';
   clearTimeout(S.timers[gid]); S.timers[gid] = setTimeout(() => flush(gid), 450);
   renderMain(); renderBar(); if (S.sheet === 'cart') openCart(true);
 }
 async function flush(gid) {
   clearTimeout(S.timers[gid]);
+  if (S.inflight[gid]) { S.timers[gid] = setTimeout(() => flush(gid), 300); return; }   // 上一次還沒回來，等它
   const v = S.ver[gid];
-  S.saveState[gid] = 'saving'; renderBar();
+  if (S.saveState[gid] !== 'retry') S.saveState[gid] = 'saving';
+  renderBar();
+  S.inflight[gid] = true;
   try {
-    await api('saveOrder', { groupId: gid, name: S.me, lines: myLines(gid) });
-    if (S.ver[gid] === v) { S.pending[gid] = false; S.saveState[gid] = 'saved'; }
-    renderBar(); if (S.sheet === 'cart') openCart(true);
+    await api('saveOrder', { groupId: gid, name: S.me, lines: myLines(gid), at: S.at[gid] || now() });
+    S.inflight[gid] = false; S.tries[gid] = 0;
+    if (S.ver[gid] === v) { S.pending[gid] = false; S.saveState[gid] = 'saved'; outboxDel(gid); }
+    else S.saveState[gid] = 'saving';
+    paintSave();
   } catch (e) {
-    if (e.code) {
-      S.pending[gid] = false; S.saveState[gid] = e.code === 'CLOSED' ? 'closed' : 'saved';
+    S.inflight[gid] = false;
+    if (!transient(e)) {                                  // 後端明確拒絕（例如已截止）：不再重試
+      S.pending[gid] = false; S.saveState[gid] = e.code === 'CLOSED' ? 'closed' : 'saved'; outboxDel(gid);
       toast(e.code === 'CLOSED' ? '這一團已截止，剛才的修改沒有存到' : e.message);
       S.sig = ''; refresh();
-    } else {
-      S.saveState[gid] = 'error'; renderBar();
-      S.timers[gid] = setTimeout(() => flush(gid), 3000);
+    } else {                                              // 伺服器忙、網路斷：一直重試到成功
+      const n = S.tries[gid] = (S.tries[gid] || 0) + 1;
+      S.saveState[gid] = 'retry'; paintSave();
+      S.timers[gid] = setTimeout(() => flush(gid), [3, 5, 10, 15][Math.min(n - 1, 3)] * 1000);
     }
   }
 }
+const paintSave = () => { renderBar(); if (S.view === 'home') renderMain(); if (S.sheet === 'cart') openCart(true); };
 function flushAll() { Object.keys(S.pending).filter(g => S.pending[g]).forEach(flush); }
+// 上次沒送出去的單（例如按完馬上關網頁），打開網頁時補送
+function restoreOutbox() {
+  const ob = outbox();
+  Object.keys(ob).forEach(gid => {
+    const x = ob[gid];
+    if (!x || x.name !== S.me || now() - x.at > 6 * 3600e3) { outboxDel(gid); return; }
+    S.data.orders = S.data.orders.filter(o => !(o.groupId === gid && o.name === S.me));
+    if (x.lines.length) S.data.orders.push({ groupId: gid, name: S.me, paid: 0, lines: x.lines, total: sumAmt(x.lines), updatedAt: x.at });
+    S.pending[gid] = true; S.ver[gid] = (S.ver[gid] || 0) + 1; S.at[gid] = x.at; S.saveState[gid] = 'saving';
+    S.timers[gid] = setTimeout(() => flush(gid), 800);
+  });
+}
+const pendingAny = () => Object.keys(S.pending).some(g => S.pending[g]);
+function saveStateText(gid, open, long) {
+  const st = S.saveState[gid];
+  if (!open && !S.pending[gid]) return long ? '已截止，不能再修改' : '已截止';
+  if (S.pending[gid] && st === 'retry') return '<span class="spin sm"></span>排隊中，自動重試…';
+  if (S.pending[gid]) return '<span class="spin sm"></span>儲存中，請先別關閉…';
+  return I.check + (long ? '已送出，可以關閉了；截止前都能改' : '已送出，可以關閉了');
+}
 
 /* ================= 畫面 ================= */
 function render() { renderTop(); renderMain(); renderBar(); }
@@ -992,7 +1040,7 @@ function gcard(g, past) {
         <span class="gc-p">${os.length ? `<span class="avs">${avs}</span>` : ''}<span class="num">${os.length} 人 · ${qty} 份 · ${money(total)}${past && due ? ' · 未收 ' + money(due) : ''}</span></span>
       </span>
     </div>
-    <div class="gc-stub"><span class="mine">${esc(mineTxt)}</span><span class="go">${past ? '看統計' : (mine.length ? '改單' : '去點')}${I.chev}</span></div>
+    <div class="gc-stub"><span class="mine">${esc(mineTxt)}</span>${S.pending[g.id] ? `<span class="pend">${S.saveState[g.id] === 'retry' ? '<span class="spin sm"></span>重試中' : '<span class="spin sm"></span>儲存中'}</span>` : ''}<span class="go">${past ? '看統計' : (mine.length ? '改單' : '去點')}${I.chev}</span></div>
   </button>`;
 }
 
@@ -1212,7 +1260,7 @@ function renderBar() {
   const lines = g ? myLines(g.id) : [];
   if (!g || !lines.length) { bar.hidden = true; bar.innerHTML = ''; return; }
   const open = isOpen(g), st = S.saveState[g.id];
-  const stTxt = !open ? '已截止' : st === 'saving' ? '儲存中…' : st === 'error' ? '連線不穩，重試中…' : (I.check + '已自動儲存');
+  const stTxt = saveStateText(g.id, open, false);
   bar.hidden = false;
   bar.innerHTML = `<button class="cartbtn ${open ? '' : 'closed'}" data-act="cart">
     <span class="cb-n num">${sumQty(lines)}</span>
@@ -1456,7 +1504,7 @@ function openCart(keepScroll) {
   const lines = myLines(g.id), open = isOpen(g), st = S.saveState[g.id], o = myOrder(g.id);
   if (!lines.length && S.sheet === 'cart') return closeSheet();
   const ps = o ? payState(o) : null;
-  const stTxt = !open ? '已截止，不能再修改' : st === 'saving' ? '儲存中…' : st === 'error' ? '連線不穩，重試中…' : '已自動儲存，截止前都能改';
+  const stTxt = saveStateText(g.id, open, true);
   openSheet('cart', `
     <h2 class="sh-h">我的訂單</h2>
     <div class="sh-sub">${esc(g.shop)} · <span class="num">${fmtTime(g.deadline)}</span> 截止${ps && ps.k !== 'unpaid' ? ' · ' + ps.t : ''}</div>
@@ -1986,7 +2034,7 @@ document.addEventListener('keydown', e => {
   if (e.target.id === 'mem-in') { e.preventDefault(); ADMIN_ACT['mem-add'](); }
   if (e.target.dataset && e.target.dataset.f === 'osq') { e.preventDefault(); const b = $(`[data-sugg="${e.target.dataset.type}"] .sugg`); if (b) b.click(); }   // 按 Enter 選第一個
 });
-window.addEventListener('beforeunload', e => { if (isDirty()) { e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('beforeunload', e => { if (isDirty() || pendingAny()) { flushAll(); e.preventDefault(); e.returnValue = ''; } });   // 還沒存好就要離開：先送，並請瀏覽器問一下
 
 /* ================= 互動 ================= */
 // 等後端確認的操作（開團、刪除、儲存…）：畫面中間顯示「處理中」，期間擋住點擊，避免以為卡住或重複按
@@ -2179,6 +2227,7 @@ window.addEventListener('pagehide', flushAll);
 
 (function init() {
   const cached = store.get(CACHE_KEY, null);
+  restoreOutbox();                 // 上次沒送出的單先放回畫面並補送
   route();
   if (cached) applyData(cached, true);
   refresh();

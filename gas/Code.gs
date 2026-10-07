@@ -52,9 +52,10 @@ function doPost(e) {
 
   const fn = ACTIONS[body.action];
   if (!fn) return out_(JSON.stringify({ error: '未知的動作', code: 'NOACTION' }));
+  // 同一時間只讓一個請求改試算表；排不到就回 BUSY，網頁會自動重試直到存進去
   const lock = LockService.getScriptLock();
+  if (!lock.tryLock(25000)) return out_(JSON.stringify({ error: '伺服器忙碌中，稍後自動重試', code: 'BUSY' }));
   try {
-    lock.waitLock(20000);
     const r = fn(body);
     CacheService.getScriptCache().remove('boot');
     return out_(JSON.stringify(r));
@@ -69,7 +70,10 @@ const ACTIONS = {
   saveOrder(p) {
     const all = readAll_(), g = all.groups.filter(x => x.id === String(p.groupId))[0];
     if (!g) throw err_('NOGROUP', '找不到這一團');
-    if (!(g.status === 'open' && Date.now() < g.deadline)) throw err_('CLOSED', '這一團已截止');
+    // 截止前按下的（p.at = 按的時間），因為排隊重試晚一點才到，3 分鐘內還是收；手動結單的不收
+    const t = Date.now(), at = Math.min(+p.at || t, t);
+    const inTime = t < g.deadline || (at < g.deadline && t < g.deadline + 3 * 60000);
+    if (!(g.status === 'open' && inTime)) throw err_('CLOSED', '這一團已截止');
     const name = String(p.name || '').trim().slice(0, 20);
     if (!name) throw err_('NONAME', '請先填名字');
     const lines = cleanLines_(p.lines);
