@@ -356,6 +356,7 @@ function statsMsgs_() {
 
 function flexOf_(gs, d) {
   const bubbles = gs.map(g => bubble_(g, d));
+  if (gs.length > 1) bubbles.unshift(overviewBubble_(gs, d));   // 兩團以上：第一張是今日總覽
   return {
     type: 'flex', altText: '點餐統計：' + gs.map(g => g.shop).join('、'),
     contents: bubbles.length === 1 ? bubbles[0] : { type: 'carousel', contents: bubbles },
@@ -412,6 +413,53 @@ function summarize_(g, d) {
   os.forEach(o => { total += o.total; paid += o.paid; due += Math.max(0, o.total - o.paid); });
   list.forEach(it => { qty += it.qty; });
   return { os: os, list: list, customs: customs, total: total, paid: paid, due: due, qty: qty };
+}
+
+// 今日總覽：每家店要付多少、每個人今天總共要付多少（一次收齊）
+function overviewBubble_(gs, d) {
+  const ink = '#16231B', muted = '#5D6D63', green = '#1E7A4C';
+  const txt = (t, o) => Object.assign({ type: 'text', text: String(t || ' '), size: 'sm', color: ink, wrap: true }, o || {});
+  const row = (l, r, o) => ({ type: 'box', layout: 'horizontal', spacing: 'sm', contents: [
+    txt(l, Object.assign({ flex: 5 }, o && o.l)), txt(r, Object.assign({ flex: 2, align: 'end' }, o && o.r)),
+  ] });
+  const typeOf = g => (d.shops.filter(x => x.name === g.shop)[0] || { type: '便當' }).type;
+  const count = {}; gs.forEach(g => { count[typeOf(g)] = (count[typeOf(g)] || 0) + 1; });
+  const tag = g => count[typeOf(g)] > 1 ? g.shop : typeOf(g);
+  const shopRows = [], people = {}, order = [];
+  let total = 0, paid = 0;
+  gs.forEach(g => {
+    const s = summarize_(g, d);
+    total += s.total; paid += s.paid;
+    shopRows.push(row(typeOf(g) + '｜' + g.shop + '　' + s.qty + (typeOf(g) === '飲料' ? ' 杯' : ' 份'), money_(s.total), { r: { weight: 'bold' } }));
+    s.os.forEach(o => {
+      if (!people[o.name]) { people[o.name] = { name: o.name, parts: [], total: 0, paid: 0 }; order.push(o.name); }
+      const p = people[o.name];
+      p.parts.push(tag(g) + ' ' + money_(o.total)); p.total += o.total; p.paid += o.paid;
+    });
+  });
+  const personRows = [];
+  order.map(n => people[n]).sort((a, b) => (a.paid >= a.total) - (b.paid >= b.total)).slice(0, 35).forEach(p => {
+    const ok = p.paid >= p.total;
+    personRows.push(row((ok ? '✅ ' : '⬜ ') + p.name, money_(p.total), { l: { weight: 'bold' }, r: { color: ok ? green : ink, weight: 'bold' } }));
+    if (p.parts.length > 1) personRows.push(txt('　' + p.parts.join(' ＋ '), { size: 'xxs', color: muted }));
+  });
+  const url = prop_('SITE_URL');
+  const footer = [
+    row('合計', money_(total), { l: { weight: 'bold' }, r: { weight: 'bold' } }),
+    row('已收', money_(paid), { r: { color: green } }),
+    row('未收', money_(total - paid), { r: { color: total - paid ? '#CF4128' : ink, weight: 'bold' } }),
+  ];
+  if (url) footer.push({ type: 'button', style: 'primary', color: green, height: 'sm', margin: 'md', action: { type: 'uri', label: '看今日總覽', uri: url.replace(/#.*$/, '') + '#today' } });
+  return {
+    type: 'bubble', size: 'mega',
+    header: { type: 'box', layout: 'vertical', paddingAll: '16px', backgroundColor: ink, contents: [
+      txt('今日總覽', { size: 'xl', weight: 'bold', color: '#FFFFFF' }),
+      txt(fmtDay_(Date.now()) + ' · ' + gs.length + ' 團 · ' + order.length + ' 人', { size: 'xs', color: '#C9D3CC' }),
+    ] },
+    body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [txt('每家店要付', { weight: 'bold', size: 'xs', color: muted })]
+      .concat(shopRows, [{ type: 'separator', margin: 'lg' }, txt('每個人要付', { weight: 'bold', size: 'xs', color: muted, margin: 'lg' })], personRows.length ? personRows : [txt('還沒有人點', { color: muted })]) },
+    footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: footer },
+  };
 }
 
 function bubble_(g, d) {

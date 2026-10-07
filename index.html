@@ -305,6 +305,22 @@ svg{display:block;flex:none}
 .fb-item + .fb-item{border-top:1px solid var(--line)}
 .fb-item:active{background:var(--surface-2)}
 .fb-item small{margin-left:auto;color:var(--muted);font-weight:400;font-size:12.5px}
+.ovcard{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:var(--ink);color:var(--bg);border-radius:var(--r);padding:14px 12px 14px 16px;margin-top:12px;transition:transform .12s}
+.ovcard:active{transform:scale(.985)}
+.ov-l{flex:1;min-width:0;display:flex;flex-direction:column}
+.ov-l b{font-family:var(--f-display);font-weight:400;font-size:19px}
+.ov-l small{opacity:.75;font-size:12.5px}
+.ov-r{display:flex;flex-direction:column;align-items:flex-end;line-height:1.2}
+.ov-r small{font-size:11.5px;opacity:.75}
+.ov-r b{font-family:var(--f-display);font-weight:400;font-size:20px;color:var(--yolk)}
+.ov-r .okc{font-size:15px}
+.shoprow{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer}
+.shoprow + .shoprow{border-top:1px solid var(--line)}
+.shoprow.total{cursor:default;background:var(--surface-2)}
+.sr-t{flex:1;min-width:0;display:flex;flex-direction:column}
+.sr-t small{color:var(--muted);font-size:12.5px}
+.shoprow .amt{font-family:var(--f-display);font-size:19px}
+.prow .nm .parts{display:block;font-size:12px;color:var(--muted);font-weight:400}
 .cup-h{font-family:var(--f-display);font-size:17px;margin-top:18px;padding-top:12px;border-top:1px dashed var(--line)}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{min-height:40px;padding:0 15px;border-radius:999px;border:1.5px solid var(--line);background:var(--surface);font-weight:500;font-size:14.5px;display:inline-flex;align-items:center;gap:5px;transition:background .12s,border-color .12s}
@@ -884,6 +900,8 @@ function softRender() { if (formView()) renderBar(); else render(); }
 function renderTop() {
   const top = $('#top');
   if (S.view === 'admin' || S.view === 'shop') top.innerHTML = adminTopHtml();
+  else if (S.view === 'today') top.innerHTML = `<div class="hrow"><button class="iconbtn" data-act="back" aria-label="回首頁">${I.back}</button>
+    <div class="gh"><div class="gh-t">今日總覽</div><div class="gh-s num">${fmtDate(now())} · 每個人要付多少、每家店要付多少</div></div></div>`;
   else if (S.view === 'group') {
     const g = curGroup();
     if (!g) { top.innerHTML = `<div class="hrow"><button class="iconbtn" data-act="back" aria-label="返回">${I.back}</button></div>`; return setHdr(); }
@@ -927,6 +945,7 @@ function renderMain() {
   }
   if (S.view === 'admin') main.innerHTML = adminHtml();
   else if (S.view === 'shop') main.innerHTML = shopEditHtml();
+  else if (S.view === 'today') main.innerHTML = todayHtml();
   else if (S.view === 'group') {
     const g = curGroup();
     if (!g) { main.innerHTML = `<div class="empty-st" style="margin-top:16px"><b>找不到這一團</b><p>可能已經過期了。</p><button class="btn" data-act="back">回首頁</button></div>`; return; }
@@ -940,6 +959,10 @@ function homeHtml() {
   const open = gs.filter(isOpen).sort((a, b) => a.deadline - b.deadline);
   const past = gs.filter(g => !isOpen(g)).sort((a, b) => b.deadline - a.deadline);
   let h = DEMO ? `<div class="demo"><span><b>試用模式</b>　範例資料，只存在這支手機</span><button data-act="reset-demo">重設</button></div>` : '';
+  const ov = overview();
+  if (ov.people.length) h += `<button class="ovcard" data-act="open-today">
+    <span class="ov-l"><b>今日總覽</b><small class="num">${ov.groups.length} 團 · ${ov.people.length} 人 · ${money(ov.total)}</small></span>
+    <span class="ov-r num">${ov.due ? `<small>未收</small><b>${money(ov.due)}</b>` : `<b class="okc">都收齊了</b>`}</span>${I.chev}</button>`;
   h += `<div class="sect-h"><h2>進行中</h2><span class="num">${open.length} 團</span></div>`;
   h += open.length ? `<div class="list">${open.map(g => gcard(g, false)).join('')}</div>`
     : `<div class="empty-st"><span class="glyph bento">揪</span><b>現在沒有開團</b><p>開團的人按右上角「管理」就能開一團。</p><button class="btn ghost" data-act="admin">${I.lock}開一團</button></div>`;
@@ -1113,6 +1136,63 @@ function statsHtml(g) {
     </div>
     <a class="btn line" style="margin-top:16px" href="#" data-act="share-stats">${I.share}分享統計到 LINE</a>
     <p class="foot-note">LINE 群組輸入「統計」或「未付」也看得到這些資料</p>`;
+}
+
+/* ================= 今日總覽：今天所有團合在一起，一個人收一次錢、每家店各付多少 ================= */
+function overview() {
+  const groups = S.data.groups.filter(g => sameDay(g.deadline, now()) || isOpen(g)).sort((a, b) => a.deadline - b.deadline);
+  const typeCount = {};
+  groups.forEach(g => { const t = shopOf(g).type; typeCount[t] = (typeCount[t] || 0) + 1; });
+  // 欄位名稱：同類型只有一團就寫「便當」「飲料」，有兩團以上就寫店名
+  const tag = g => typeCount[shopOf(g).type] > 1 ? g.shop : shopOf(g).type;
+  const shops = groups.map(g => { const s = summarize(g); return { g, tag: tag(g), type: shopOf(g).type, qty: s.qty, total: s.total, paid: s.paid, due: s.due, people: s.os.length }; });
+  const map = new Map();
+  groups.forEach(g => ordersOf(g.id).forEach(o => {
+    let p = map.get(o.name);
+    if (!p) { p = { name: o.name, parts: [], total: 0, paid: 0 }; map.set(o.name, p); }
+    p.parts.push({ g, tag: tag(g), total: o.total, paid: +o.paid || 0 });
+    p.total += o.total; p.paid += +o.paid || 0;
+  }));
+  const people = [...map.values()].map(p => Object.assign(p, { state: payState({ total: p.total, paid: p.paid }), allPaid: p.parts.every(x => x.paid === x.total) }))
+    .sort((a, b) => a.allPaid === b.allPaid ? a.name.localeCompare(b.name, 'zh-Hant') : (a.allPaid ? 1 : -1));
+  const sum = k => shops.reduce((s, x) => s + x[k], 0);
+  return { groups, shops, people, total: sum('total'), paid: sum('paid'), due: sum('due') };
+}
+function todayHtml() {
+  const ov = overview();
+  if (!ov.people.length) return `<div class="empty-st" style="margin-top:14px"><b>今天還沒有人點</b><p>有人點了之後，這裡會合計每個人今天要付多少。</p></div>`;
+  const unpaid = ov.people.filter(p => !p.allPaid), shown = S.unpaidOnly ? unpaid : ov.people;
+  return `
+    <div class="tiles">
+      <div class="tile"><small>今天總金額</small><b>${money(ov.total)}</b></div>
+      <div class="tile due"><small>未收 · ${unpaid.length} 人</small><b>${money(ov.due)}</b></div>
+    </div>
+    <div class="block">
+      <div class="block-h"><h3>每家店要付</h3></div>
+      ${ov.shops.map(x => `<div class="shoprow" data-act="open-group" data-id="${esc(x.g.id)}">
+        <span class="glyph xs ${x.type === '飲料' ? 'drink' : 'bento'}">${x.type === '飲料' ? ART.tea : ART.bento}</span>
+        <span class="sr-t"><b>${esc(x.g.shop)}</b><small class="num">${x.type} · ${x.qty} ${x.type === '飲料' ? '杯' : '份'} · ${x.people} 人${x.due ? ' · 未收 ' + money(x.due) : ''}</small></span>
+        <span class="amt num">${money(x.total)}</span></div>`).join('')}
+      <div class="shoprow total"><span class="sr-t"><b>合計</b><small class="num">已收 ${money(ov.paid)}</small></span><span class="amt num">${money(ov.total)}</span></div>
+    </div>
+    <div class="block">
+      <div class="block-h"><h3>每個人要付</h3><span class="spacer"></span><button class="sbtn ${S.collecting ? 'on' : ''}" data-act="collect">${S.collecting ? I.check + '收款中' : I.lock + '開始收款'}</button></div>
+      <div class="filters"><button class="fchip ${S.unpaidOnly ? '' : 'on'}" data-act="filter" data-v="0">全部 ${ov.people.length}</button><button class="fchip ${S.unpaidOnly ? 'on' : ''}" data-act="filter" data-v="1">未付 ${unpaid.length}</button></div>
+      <div style="margin-top:6px">${shown.map(p => `<div class="prow">${avatar(p.name, 'sm')}
+        <span class="nm">${esc(p.name)}<small class="parts num">${p.parts.map(x => esc(x.tag) + ' ' + money(x.total) + (x.paid === x.total ? ' ✓' : '')).join(' ＋ ')}</small></span>
+        <span class="amt">${money(p.total)}</span><span class="st ${p.allPaid ? 'paid' : p.paid ? 'short' : 'unpaid'}">${p.allPaid ? '已付' : p.paid ? '差 ' + money(p.total - p.paid) : '未付'}</span>
+        ${S.collecting ? `<button class="tog ${p.allPaid ? 'on' : ''}" data-act="ov-paid" data-name="${esc(p.name)}" aria-label="${esc(p.name)} 今天都付清了"></button>` : ''}</div>`).join('') || '<div class="prow muted">都付清了</div>'}</div>
+    </div>
+    <a class="btn line" style="margin-top:16px" href="#" data-act="share-today">${I.share}分享今日總覽到 LINE</a>
+    <p class="foot-note">收款中按開關，會把這個人今天每一團的訂單一起標成已付</p>`;
+}
+function overviewShareText() {
+  const ov = overview(), out = [`【今日總覽】${fmtDate(now())}`, ''];
+  ov.shops.forEach(x => out.push(`${x.tag === x.type ? x.type + '｜' : ''}${x.g.shop}：${x.qty} ${x.type === '飲料' ? '杯' : '份'} ${money(x.total)}`));
+  out.push(`合計 ${money(ov.total)}，已收 ${money(ov.paid)}，未收 ${money(ov.due)}`, '');
+  ov.people.forEach(p => out.push(`${p.allPaid ? '✅' : '⬜'} ${p.name} ${money(p.total)}（${p.parts.map(x => x.tag + ' ' + money(x.total)).join('＋')}）`));
+  out.push('', '明細 👉 ' + SITE + '#today');
+  return out.join('\n');
 }
 
 function renderBar() {
@@ -1989,6 +2069,21 @@ const ACT = {
     try { await api('setPaid', { pin: PIN, groupId: g.id, name: o.name, paid }); }
     catch (e) { o.paid = before; renderMain(); toast('沒有存到：' + (e.message || '連線失敗')); }
   },
+  // 今日總覽：一個人今天每一團一起標已付／未付
+  'ov-paid': async el => {
+    const p = overview().people.find(x => x.name === el.dataset.name); if (!p) return;
+    const paid = !p.allPaid, jobs = [];
+    p.parts.forEach(x => {
+      const o = S.data.orders.find(y => y.groupId === x.g.id && y.name === p.name); if (!o) return;
+      const before = o.paid; o.paid = paid ? o.total : 0;
+      jobs.push(api('setPaid', { pin: PIN, groupId: x.g.id, name: p.name, paid }).catch(e => { o.paid = before; throw e; }));
+    });
+    S.sig = ''; renderMain();
+    try { await Promise.all(jobs); toast(p.name + (paid ? ' 今天的都標成已付了' : ' 改回未付')); }
+    catch (e) { renderMain(); toast('有一筆沒存到：' + (e.message || '連線失敗')); }
+  },
+  'open-today': () => { location.hash = 'today'; },
+  'share-today': () => shareSheet('分享今日總覽', overviewShareText()),
   copy: () => copyText(storeText(curGroup())),
   'sheet-close': () => closeSheet(),
   reload: () => { S.loadErr = null; render(); refresh(); },
@@ -2010,7 +2105,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet()
   window.addEventListener('touchend', () => { if (y0 == null) return; y0 = null; sh.classList.remove('drag'); sh.style.transform = ''; if (dy > 90) closeSheet(); });
 })();
 
-const curHash = () => S.view === 'group' ? 'g-' + S.gid : S.view === 'admin' || S.view === 'shop' ? S.view : '';
+const curHash = () => S.view === 'group' ? 'g-' + S.gid : ['admin', 'shop', 'today'].includes(S.view) ? S.view : '';
 function route() {
   if (S.guardSkip) { S.guardSkip = false; return; }
   const h = location.hash.slice(1), was = curHash();
@@ -2023,7 +2118,7 @@ function route() {
   if ((h === 'admin' || h === 'shop') && !S.pinOk) { location.hash = ''; return; }
   if (h === 'shop' && !S.edit) { location.hash = 'admin'; return; }
   if (h.indexOf('g-') === 0) { S.view = 'group'; S.gid = h.slice(2); }
-  else if (h === 'admin' || h === 'shop') { S.view = h; S.gid = null; }
+  else if (h === 'admin' || h === 'shop' || h === 'today') { S.view = h; S.gid = null; }
   else { S.view = 'home'; S.gid = null; }
   if (S.view !== 'shop') S.edit = null;
   if (was !== h) { S.tab = 'menu'; S.collecting = false; S.unpaidOnly = false; if (S.sheet && !S.sheetLocked) closeSheet(); }
