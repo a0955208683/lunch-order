@@ -383,8 +383,10 @@ function summarize_(g, d) {
   const os = d.orders.filter(o => o.groupId === g.id && o.lines && o.lines.length);
   const menu = d.menu.filter(m => m.shop === g.shop), dups = dupNames_(menu);
   const order = menu.map(m => label_(m, dups));
-  const items = {};
+  const items = {}, customs = [];
   os.forEach(o => o.lines.forEach(l => {
+    // 客製點餐另外列，不混進品項合計（要先問店家能不能做）
+    if (l.custom) { customs.push({ name: o.name, text: l.custom.text, qty: l.qty, fallback: fallback_(l, dups) }); return; }
     const name = label_(l, dups);       // 同名不同分類的會帶分類，例如「鍋燒類 拉麵」
     const it = items[name] || (items[name] = { item: name, qty: 0, sets: 0, vars: {} });
     it.qty += l.qty * (l.bogo ? 2 : 1);                 // 買一送一的一組是 2 杯
@@ -406,7 +408,7 @@ function summarize_(g, d) {
   let total = 0, paid = 0, due = 0, qty = 0;
   os.forEach(o => { total += o.total; paid += o.paid; due += Math.max(0, o.total - o.paid); });
   list.forEach(it => { qty += it.qty; });
-  return { os: os, list: list, total: total, paid: paid, due: due, qty: qty };
+  return { os: os, list: list, customs: customs, total: total, paid: paid, due: due, qty: qty };
 }
 
 function bubble_(g, d) {
@@ -431,6 +433,13 @@ function bubble_(g, d) {
     if (it.sets) itemRows.push(txt('　買一送一共 ' + it.sets + ' 組', { size: 'xxs', color: muted }));
     it.vars.forEach(v => v.notes.forEach(n => itemRows.push(txt('　備註 ' + n, { size: 'xxs', color: muted }))));
   });
+  if (s.customs.length) {
+    itemRows.push({ type: 'separator', margin: 'lg' }, title('客製點餐（先問店家能不能做）'));
+    s.customs.slice(0, 15).forEach(c => {
+      itemRows.push(txt(c.name + '：' + c.text + (c.qty > 1 ? ' ×' + c.qty : ''), { weight: 'bold' }));
+      itemRows.push(txt('　做不到改：' + c.fallback, { size: 'xs', color: muted }));
+    });
+  }
   const peopleRows = s.os.slice(0, 35).map(o => {
     const ok = o.paid === o.total;
     return row((ok ? '✅ ' : '⬜ ') + o.name, money_(o.total), { r: { color: ok ? '#1E7A4C' : ink } });
@@ -587,17 +596,25 @@ function groupRow_(id) {
 }
 
 function cleanLines_(lines) {
-  return (Array.isArray(lines) ? lines : []).filter(l => l && l.item && +l.qty > 0).slice(0, 30).map(l => ({
-    item: String(l.item).slice(0, 40),
-    cat: String(l.cat || '').slice(0, 20),
-    bogo: !!l.bogo,
-    size: String(l.size || '').trim().slice(0, 6),
-    opts: (Array.isArray(l.opts) ? l.opts : []).map(String).slice(0, 12),
-    opts2: l.bogo && Array.isArray(l.opts2) ? l.opts2.map(String).slice(0, 12) : [],
-    unit: Math.max(0, Math.round(+l.unit || 0)),
-    qty: Math.min(50, Math.max(1, Math.round(+l.qty))),
-    note: String(l.note || '').slice(0, 60),
-  }));
+  return (Array.isArray(lines) ? lines : []).filter(l => l && l.item && +l.qty > 0).slice(0, 30).map(l => {
+    const x = {
+      item: String(l.item).slice(0, 40),
+      cat: String(l.cat || '').slice(0, 20),
+      bogo: !!l.bogo,
+      size: String(l.size || '').trim().slice(0, 6),
+      opts: (Array.isArray(l.opts) ? l.opts : []).map(String).slice(0, 12),
+      opts2: l.bogo && Array.isArray(l.opts2) ? l.opts2.map(String).slice(0, 12) : [],
+      unit: Math.max(0, Math.round(+l.unit || 0)),
+      qty: Math.min(50, Math.max(1, Math.round(+l.qty))),
+      note: String(l.note || '').slice(0, 60),
+    };
+    // 客製點餐：custom.text 是想點的（菜單上沒有），其餘欄位是做不到時改點的備案
+    if (l.custom && String(l.custom.text || '').trim()) {
+      x.custom = { text: String(l.custom.text).trim().slice(0, 60), price: Math.max(0, Math.round(num_(l.custom.price))) };
+      x.fbUnit = Math.max(0, Math.round(num_(l.fbUnit)));
+    }
+    return x;
+  });
 }
 function sumAmt_(lines) { return lines.reduce((s, l) => s + l.unit * l.qty, 0); }
 // 買一送一第 2 杯的選項；沒有另外選就跟第 1 杯一樣
@@ -607,7 +624,8 @@ function variant_(l) {
   const c2 = cup2_(l).join(' ');
   return l.bogo && c2 !== (l.opts || []).join(' ') ? v + '／第2杯 ' + c2 : v;
 }
+function fallback_(l, dups) { return label_(l, dups || {}) + (variant_(l) ? ' ' + variant_(l) : ''); }
 function linesText_(lines, dups) {
-  return lines.map(l => label_(l, dups || {}) + (variant_(l) ? ' ' + variant_(l) : '') +
+  return lines.map(l => (l.custom ? '客製：' + l.custom.text + '（做不到改：' + fallback_(l, dups) + '）' : fallback_(l, dups)) +
     ' ×' + l.qty + (l.bogo ? ' 組' : '') + (l.note ? '（' + l.note + '）' : '')).join('；');
 }
