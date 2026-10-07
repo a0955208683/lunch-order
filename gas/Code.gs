@@ -116,6 +116,15 @@ const ACTIONS = {
     return { ok: true };
   },
 
+  // 開錯團用：整團連同訂單刪掉
+  deleteGroup(p) {
+    needPin_(p);
+    const id = String(p.groupId), r = groupRow_(id);
+    r.sh.deleteRow(r.row);
+    writeRows_('orders', rows_('orders').filter(x => String(x[0]).trim() && String(x[0]) !== id));
+    return { ok: true };
+  },
+
   extendGroup(p) {
     needPin_(p);
     const r = groupRow_(p.groupId);

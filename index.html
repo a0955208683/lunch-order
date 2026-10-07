@@ -582,6 +582,11 @@ const Mock = (() => {
       d.groups.push(g); return { ok: true, id: g.id };
     },
     closeGroup(d, p) { need(p); grp(d, p.groupId).status = 'closed'; return { ok: true }; },
+    deleteGroup(d, p) {
+      need(p); grp(d, p.groupId);
+      d.groups = d.groups.filter(g => g.id !== p.groupId); d.orders = d.orders.filter(o => o.groupId !== p.groupId);
+      return { ok: true };
+    },
     extendGroup(d, p) {
       need(p); const g = grp(d, p.groupId);
       g.status = 'open'; g.deadline = Math.max(now(), g.deadline) + (+p.minutes || 15) * 60e3; return { ok: true };
@@ -1203,7 +1208,9 @@ function aGroupsHtml() {
   return `<div class="panel" style="padding-block:4px">${gs.map(g => `<div class="arow">
     <div class="t"><b>${esc(g.shop)}</b><small class="num">${fmtDate(g.deadline)} ${fmtTime(g.deadline)} 截止 · ${isOpen(g) ? '進行中' : '已截止'} · ${ordersOf(g.id).length} 人</small></div>
     ${isOpen(g) ? `<button class="sbtn" data-act="grp-op" data-op="extend" data-id="${esc(g.id)}">延 15 分</button><button class="sbtn" data-act="grp-op" data-op="close" data-id="${esc(g.id)}">結單</button>`
-      : `<button class="sbtn" data-act="grp-op" data-op="reopen" data-id="${esc(g.id)}">重開 30 分</button>`}</div>`).join('')}</div>`;
+      : `<button class="sbtn" data-act="grp-op" data-op="reopen" data-id="${esc(g.id)}">重開 30 分</button>`}
+    <button class="mini del" data-act="grp-del" data-id="${esc(g.id)}" aria-label="刪除這一團">${I.x}</button></div>`).join('')}</div>
+  <div class="hint" style="margin:8px 2px 0">按 ✕ 會刪除整團和裡面所有訂單，開錯團時用。</div>`;
 }
 
 function aShopsHtml() {
@@ -1439,6 +1446,14 @@ const ADMIN_ACT = {
     el.disabled = true;
     try { await api(map[0], Object.assign({ pin: PIN, groupId: el.dataset.id }, map[1])); toast(op === 'close' ? '已結單' : '已延長'); S.sig = ''; await refresh(); }
     catch (err) { toast(err.message || '沒有成功，再試一次'); el.disabled = false; }
+  },
+  'grp-del': async el => {
+    const g = S.data.groups.find(x => x.id === el.dataset.id); if (!g) return;
+    const n = ordersOf(g.id).length;
+    const ok = await confirmSheet('刪除這一團', `「${g.shop}」${fmtDate(g.deadline)} ${fmtTime(g.deadline)} 截止的團${n ? `，連同 ${n} 個人的訂單` : ''}會一起刪除，刪了就找不回來。`, '刪除', true);
+    if (!ok) return;
+    try { await api('deleteGroup', { pin: PIN, groupId: g.id }); toast('已刪除「' + g.shop + '」這一團'); S.sig = ''; await refresh(); }
+    catch (err) { toast(err.message || '沒有成功，再試一次'); }
   },
   'edit-shop': el => startEdit(el.dataset.name),
   'to-admin': () => { location.hash = 'admin'; },
