@@ -67,7 +67,8 @@ function doPost(e) {
 
 const ACTIONS = {
   saveOrder(p) {
-    const g = findGroup_(p.groupId);
+    const all = readAll_(), g = all.groups.filter(x => x.id === String(p.groupId))[0];
+    if (!g) throw err_('NOGROUP', '找不到這一團');
     if (!(g.status === 'open' && Date.now() < g.deadline)) throw err_('CLOSED', '這一團已截止');
     const name = String(p.name || '').trim().slice(0, 20);
     if (!name) throw err_('NONAME', '請先填名字');
@@ -80,7 +81,8 @@ const ACTIONS = {
       return { ok: true };
     }
     const paid = row > 0 ? v[row - 1][4] : '';
-    const data = [g.id, name, linesText_(lines), sumAmt_(lines), paid, new Date(), JSON.stringify(lines)];
+    const dups = dupNames_(all.menu.filter(m => m.shop === g.shop));
+    const data = [g.id, name, linesText_(lines, dups), sumAmt_(lines), paid, new Date(), JSON.stringify(lines)];
     if (row > 0) sh.getRange(row, 1, 1, data.length).setValues([data]);
     else sh.appendRow(data);
     return { ok: true };
@@ -106,9 +108,11 @@ const ACTIONS = {
     if (!(dl > Date.now())) throw err_('BADTIME', '截止時間已經過了');
     const id = Utilities.getUuid().replace(/-/g, '').slice(0, 8);
     // 今日買一送一：只收這家店菜單裡有的品項
-    const items = readAll_().menu.filter(m => m.shop === shop).map(m => m.item), seen = {};
-    const promos = (Array.isArray(p.promos) ? p.promos : []).filter(x => x && items.indexOf(x.item) >= 0 && !seen[x.item] && (seen[x.item] = true))
-      .slice(0, 20).map(x => ({ item: String(x.item), only: !!x.only, size: String(x.size || '').trim().slice(0, 6) }));
+    const items = readAll_().menu.filter(m => m.shop === shop), seen = {};
+    const promos = (Array.isArray(p.promos) ? p.promos : []).filter(x => {
+      if (!x || !items.some(m => sameItem_(m, x))) return false;
+      const k = (x.cat || '') + '|' + x.item; if (seen[k]) return false; seen[k] = true; return true;
+    }).slice(0, 20).map(x => ({ item: String(x.item), cat: String(x.cat || '').slice(0, 20), only: !!x.only, size: String(x.size || '').trim().slice(0, 6) }));
     const sh = sheet_('groups');
     sh.getRange(1, 1, 1, HEAD.groups.length).setValues([HEAD.groups]).setFontWeight('bold').setBackground('#DDEFE3');
     sh.appendRow([id, shop, new Date(dl), ST_OPEN, String(p.note || '').slice(0, 80), new Date(), '', promos.length ? JSON.stringify(promos) : '']);
@@ -278,9 +282,9 @@ function cleanItems_(items, type) {
     cat: String(it.cat || '').trim().slice(0, 20) || '其他',
     item: String(it.item).trim().slice(0, 40),
     price: Math.max(0, Math.round(num_(it.price))),
-    priceL: type === '飲料' ? Math.max(0, Math.round(num_(it.priceL))) : 0,
+    priceL: Math.max(0, Math.round(num_(it.priceL))),
     desc: String(it.desc || '').trim().slice(0, 40),
-    sizes: type === '飲料' && num_(it.priceL) ? sizes_(it.sizes) : '',
+    sizes: num_(it.priceL) ? sizes_(it.sizes, type) : '',
     disc: disc_(it.disc),
   }));
 }
@@ -292,11 +296,19 @@ function disc_(s) {
   return '';
 }
 function json_(s, d) { try { return s ? JSON.parse(s) : d; } catch (_) { return d; } }
-// 兩種容量的名稱，例如「M/L」「L/瓶」
-function sizes_(s) {
+// 兩種份量的名稱，例如「M/L」「L/瓶」「小/大」
+function sizes_(s, type) {
   const p = String(s || '').split('/').map(x => x.trim().slice(0, 4)).filter(String);
-  return p.length === 2 && p[0] !== p[1] ? p.join('/') : 'M/L';
+  return p.length === 2 && p[0] !== p[1] ? p.join('/') : (type === '飲料' ? 'M/L' : '小/大');
 }
+// 不同分類可以有同名品項（鍋燒類「拉麵」、泡菜類「拉麵」），用「分類＋品名」分辨
+function sameItem_(a, b) { return a.item === b.item && (!a.cat || !b.cat || a.cat === b.cat); }
+function dupNames_(menu) {
+  const seen = {}, d = {};
+  menu.forEach(m => { if (seen[m.item]) d[m.item] = true; seen[m.item] = true; });
+  return d;
+}
+function label_(x, dups) { return x.cat && dups[x.item] ? x.cat + ' ' + x.item : x.item; }
 
 /* ================= LINE Bot ================= */
 
@@ -369,10 +381,12 @@ function linkMsg_() {
 
 function summarize_(g, d) {
   const os = d.orders.filter(o => o.groupId === g.id && o.lines && o.lines.length);
-  const order = d.menu.filter(m => m.shop === g.shop).map(m => m.item);
+  const menu = d.menu.filter(m => m.shop === g.shop), dups = dupNames_(menu);
+  const order = menu.map(m => label_(m, dups));
   const items = {};
   os.forEach(o => o.lines.forEach(l => {
-    const it = items[l.item] || (items[l.item] = { item: l.item, qty: 0, sets: 0, vars: {} });
+    const name = label_(l, dups);       // 同名不同分類的會帶分類，例如「鍋燒類 拉麵」
+    const it = items[name] || (items[name] = { item: name, qty: 0, sets: 0, vars: {} });
     it.qty += l.qty * (l.bogo ? 2 : 1);                 // 買一送一的一組是 2 杯
     if (l.bogo) it.sets += l.qty;
     // 買一送一拆成兩杯各自統計（兩杯甜度冰塊可能不同），店家照杯數做
@@ -575,6 +589,7 @@ function groupRow_(id) {
 function cleanLines_(lines) {
   return (Array.isArray(lines) ? lines : []).filter(l => l && l.item && +l.qty > 0).slice(0, 30).map(l => ({
     item: String(l.item).slice(0, 40),
+    cat: String(l.cat || '').slice(0, 20),
     bogo: !!l.bogo,
     size: String(l.size || '').trim().slice(0, 6),
     opts: (Array.isArray(l.opts) ? l.opts : []).map(String).slice(0, 12),
@@ -592,7 +607,7 @@ function variant_(l) {
   const c2 = cup2_(l).join(' ');
   return l.bogo && c2 !== (l.opts || []).join(' ') ? v + '／第2杯 ' + c2 : v;
 }
-function linesText_(lines) {
-  return lines.map(l => l.item + (variant_(l) ? ' ' + variant_(l) : '') +
+function linesText_(lines, dups) {
+  return lines.map(l => label_(l, dups || {}) + (variant_(l) ? ' ' + variant_(l) : '') +
     ' ×' + l.qty + (l.bogo ? ' 組' : '') + (l.note ? '（' + l.note + '）' : '')).join('；');
 }

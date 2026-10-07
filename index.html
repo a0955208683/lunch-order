@@ -490,7 +490,9 @@ const cup2Of = l => (l.opts2 && l.opts2.length ? l.opts2 : l.opts || []);
 const cupsDiffer = l => !!l.bogo && cup2Of(l).join('、') !== (l.opts || []).join('、');
 const tagsOf = l => [l.bogo ? BOGO : '', l.size, ...(l.opts || []), ...(cupsDiffer(l) ? ['第2杯：' + cup2Of(l).join(' ')] : [])].filter(Boolean);
 const variantText = l => tagsOf(l).join(' ');
-const lineKey = l => l.item + '|' + variantText(l) + '|' + (l.note || '');
+const lineKey = l => (l.cat || '') + '|' + l.item + '|' + variantText(l) + '|' + (l.note || '');
+// 不同分類可以有同名品項（鍋燒類「拉麵」、泡菜類「拉麵」）：用「分類＋品名」分辨，同名的顯示時加上分類
+const sameItem = (a, b) => a.item === b.item && (!a.cat || !b.cat || a.cat === b.cat);
 const sumAmt = lines => lines.reduce((s, l) => s + l.unit * l.qty, 0);
 const cupsOf = l => l.qty * (l.bogo ? 2 : 1);          // 買一送一的一組是 2 杯
 const sumQty = lines => lines.reduce((s, l) => s + cupsOf(l), 0);
@@ -505,15 +507,19 @@ function parseDisc(s) {
 const cleanDisc = s => { const d = parseDisc(s); return d ? (d.kind === 'minus' ? '-' : 'x') + d.n : ''; };
 const discText = d => !d ? '' : d.kind === 'minus' ? '每份減 ' + d.n + ' 元' : (d.n % 10 ? d.n : d.n / 10) + ' 折';
 const applyDisc = (p, d) => !d || !p ? p : d.kind === 'minus' ? Math.max(0, p - d.n) : Math.round(p * d.n / 100);
-const promoOf = (g, item) => (g.promos || []).find(p => p.item === item);
+const promoOf = (g, m) => (g.promos || []).find(p => sameItem(p, m));
+// items = 這家店的菜單
 function cleanPromos(list, items) {
   const seen = new Set();
-  return (Array.isArray(list) ? list : []).filter(p => p && items.includes(p.item) && !seen.has(p.item) && seen.add(p.item))
-    .slice(0, 20).map(p => ({ item: String(p.item), only: !!p.only, size: String(p.size || '').trim().slice(0, 6) }));
+  return (Array.isArray(list) ? list : []).filter(p => {
+    if (!p || !items.some(m => sameItem(m, p))) return false;
+    const k = (p.cat || '') + '|' + p.item; if (seen.has(k)) return false; seen.add(k); return true;
+  }).slice(0, 20).map(p => ({ item: String(p.item), cat: String(p.cat || '').slice(0, 20), only: !!p.only, size: String(p.size || '').trim().slice(0, 6) }));
 }
 function cleanLines(lines) {
   return (Array.isArray(lines) ? lines : []).filter(l => l && l.item && +l.qty > 0).slice(0, 30).map(l => ({
     item: String(l.item).slice(0, 40),
+    cat: String(l.cat || '').slice(0, 20),
     bogo: !!l.bogo,
     size: String(l.size || '').trim().slice(0, 6),
     opts: (l.opts || []).map(String).slice(0, 12),
@@ -526,16 +532,18 @@ function cleanLines(lines) {
 function cleanItems(items, type) {
   return (Array.isArray(items) ? items : []).filter(it => it && String(it.item || '').trim()).slice(0, 200).map(it => ({
     cat: String(it.cat || '').trim().slice(0, 20) || '其他', item: String(it.item).trim().slice(0, 40),
-    price: Math.max(0, Math.round(+it.price || 0)), priceL: type === '飲料' ? Math.max(0, Math.round(+it.priceL || 0)) : 0,
+    price: Math.max(0, Math.round(+it.price || 0)), priceL: Math.max(0, Math.round(+it.priceL || 0)),
     desc: String(it.desc || '').trim().slice(0, 40),
-    sizes: type === '飲料' && +it.priceL ? splitSizes(it.sizes).join('/') : '',
+    sizes: +it.priceL ? splitSizes(it.sizes, type).join('/') : '',
     disc: cleanDisc(it.disc),
   }));
 }
 // 兩種容量的名稱，例如「M/L」「L/瓶」；沒設定或不合理就用 M/L
-function splitSizes(s) {
+// 兩種份量的預設名稱：飲料 M/L，吃的 小/大
+const defSizes = type => type === '飲料' ? ['M', 'L'] : ['小', '大'];
+function splitSizes(s, type) {
   const p = String(s || '').split('/').map(x => x.trim().slice(0, 4)).filter(Boolean);
-  return p.length === 2 && p[0] !== p[1] ? p : ['M', 'L'];
+  return p.length === 2 && p[0] !== p[1] ? p : defSizes(type);
 }
 function cleanOptions(groups) {
   return (Array.isArray(groups) ? groups : []).map(g => ({
@@ -655,7 +663,7 @@ const Mock = (() => {
       need(p);
       if (!d.shops.find(s => s.name === p.shop && !s.disabled)) throw apiErr('NOSHOP', '找不到這家店，或這家店暫停使用中');
       if (+p.deadline <= now()) throw apiErr('BADTIME', '截止時間已經過了');
-      const promos = cleanPromos(p.promos, d.menu.filter(m => m.shop === p.shop).map(m => m.item));
+      const promos = cleanPromos(p.promos, d.menu.filter(m => m.shop === p.shop));
       const g = { id: Math.random().toString(36).slice(2, 10), shop: p.shop, deadline: +p.deadline, status: 'open', note: String(p.note || '').slice(0, 80), createdAt: now(), promos };
       d.groups.push(g); return { ok: true, id: g.id };
     },
@@ -757,7 +765,15 @@ function groupOpts(key) {
 }
 const hasOwnOpts = name => !!name && S.data.options.some(o => o.type === name);
 const optionsFor = shop => hasOwnOpts(shop.name) ? groupOpts(shop.name) : groupOpts(shop.type);
-const sizesOf = m => splitSizes(m.sizes);
+const sizesOf = m => splitSizes(m.sizes, (S.data.shops.find(s => s.name === m.shop) || {}).type);
+// 這家店菜單裡在不同分類重複出現的品名
+function dupNames(shop) {
+  const seen = new Set(), d = new Set();
+  menuOf(shop).forEach(m => { if (seen.has(m.item)) d.add(m.item); seen.add(m.item); });
+  return d;
+}
+const labelOf = (shop, x) => x.cat && dupNames(shop).has(x.item) ? x.cat + ' ' + x.item : x.item;
+const findMenu = (shop, x) => menuOf(shop).find(m => sameItem(m, x));
 const AV = ['--a1', '--a2', '--a3', '--a4', '--a5', '--a6'];
 function avatar(name, cls = '') {
   if (!name) return `<span class="av empty ${cls}">?</span>`;
@@ -909,8 +925,8 @@ function gcard(g, past) {
   const due = os.reduce((s, o) => s + Math.max(0, o.total - (+o.paid || 0)), 0);
   const drink = shop.type === '飲料';
   const avs = os.slice(-5).map(o => avatar(o.name, 'sm')).join('');
-  const mineTxt = mine.length ? '你點了 ' + mine.map(l => l.item + (l.qty > 1 || l.bogo ? ' ' + qtyText(l) : '')).join('、') : (past ? '你沒有點' : '你還沒點');
-  const promoTxt = (g.promos || []).length && !past ? ' · ' + BOGO + '：' + g.promos.map(p => p.item).join('、') : '';
+  const mineTxt = mine.length ? '你點了 ' + mine.map(l => labelOf(g.shop, l) + (l.qty > 1 || l.bogo ? ' ' + qtyText(l) : '')).join('、') : (past ? '你沒有點' : '你還沒點');
+  const promoTxt = (g.promos || []).length && !past ? ' · ' + BOGO + '：' + g.promos.map(p => labelOf(g.shop, p)).join('、') : '';
   return `<button class="gcard ${past ? 'past' : ''}" data-act="open-group" data-id="${esc(g.id)}">
     <div class="gc-main">
       <span class="glyph ${drink ? 'drink' : 'bento'}">${drink ? ART.tea : ART.bento}</span>
@@ -926,22 +942,25 @@ function gcard(g, past) {
 
 function menuHtml(g) {
   const shop = shopOf(g), items = menuOf(g.shop), open = isOpen(g), drink = shop.type === '飲料';
-  const mine = myLines(g.id), others = {};
-  ordersOf(g.id).forEach(o => { if (o.name !== S.me) o.lines.forEach(l => { others[l.item] = (others[l.item] || 0) + l.qty; }); });
+  const mine = myLines(g.id), otherLines = [];
+  ordersOf(g.id).forEach(o => { if (o.name !== S.me) otherLines.push(...o.lines); });
+  const othersOf = m => otherLines.filter(l => sameItem(l, m)).reduce((s, l) => s + cupsOf(l), 0);
   const cats = [...new Set(items.map(m => m.cat || '其他'))];
   let h = '';
   if (!open) h += `<div class="notice closed">這一團已截止，訂單不能再修改。</div>`;
   const note = [g.note, shop.note].filter(Boolean).join(' · ');
-  if ((g.promos || []).length && open) h += `<div class="notice promo"><span class="bogo">${BOGO}</span><span>今天 ${esc(g.promos.map(p => p.item).join('、'))}</span></div>`;
+  if ((g.promos || []).length && open) h += `<div class="notice promo"><span class="bogo">${BOGO}</span><span>今天 ${esc(g.promos.map(p => labelOf(g.shop, p) + (p.size ? ' ' + p.size : '')).join('、'))}</span></div>`;
   if (note && open) h += `<div class="notice"><span>${esc(note)}</span></div>`;
   if (!items.length) h += `<div class="empty-st" style="margin-top:16px"><b>這家店還沒有菜單</b><p>到「管理 → 店家」新增品項。</p></div>`;
   cats.forEach((c, ci) => {
     const catItems = items.filter(m => (m.cat || '其他') === c), cd = parseDisc(catItems[0] && catItems[0].disc);
     h += `<section class="sec" id="cat-${ci}"><h3>${esc(c)}${cd ? `<span class="dtag">${discText(cd)}</span>` : ''}</h3><div class="menu">`;
     catItems.forEach(m => {
-      const myQty = mine.filter(l => l.item === m.item).reduce((s, l) => s + cupsOf(l), 0);
-      const pr = promoOf(g, m.item), d = parseDisc(m.disc);
-      const plainIdx = pr ? -1 : mine.findIndex(l => l.item === m.item && !l.size && !l.opts.length && !l.note && !l.bogo);
+      const myQty = mine.filter(l => sameItem(l, m)).reduce((s, l) => s + cupsOf(l), 0), others = othersOf(m);
+      const pr = promoOf(g, m), d = parseDisc(m.disc);
+      // 便當沒有份量、沒有優惠活動時才能直接 +1；其他都要打開面板選
+      const quick = !drink && !pr && !m.priceL;
+      const plainIdx = quick ? mine.findIndex(l => sameItem(l, m) && !l.size && !l.opts.length && !l.note && !l.bogo) : -1;
       const sz = sizesOf(m);
       const regular = m.priceL ? `<span class="price">${esc(sz[0])} ${money(applyDisc(m.price, d))}</span><span class="price">${esc(sz[1])} ${money(applyDisc(m.priceL, d))}</span>` : `<span class="price">${money(applyDisc(m.price, d))}</span>`;
       let price = regular;
@@ -951,14 +970,14 @@ function menuHtml(g) {
       }
       let ctl;
       if (!open) ctl = myQty ? `<span class="cnt">×${myQty}</span>` : '';
-      else if (!drink && plainIdx >= 0) {
+      else if (plainIdx >= 0) {
         const extra = myQty - mine[plainIdx].qty;
         ctl = `${extra ? `<span class="cnt">+${extra}</span>` : ''}<span class="stepper"><button data-act="dec" data-idx="${plainIdx}" aria-label="少一份">${I.minus}</button><span class="n">${mine[plainIdx].qty}</span><button data-act="inc" data-idx="${plainIdx}" aria-label="多一份">${I.plus}</button></span>`;
-      } else ctl = `${myQty ? `<span class="cnt">×${myQty}</span>` : ''}<button class="add" data-act="${drink || pr ? 'item' : 'quick'}" data-item="${esc(m.item)}" aria-label="加入 ${esc(m.item)}">${I.plus}</button>`;
+      } else ctl = `${myQty ? `<span class="cnt">×${myQty}</span>` : ''}<button class="add" data-act="${quick ? 'quick' : 'item'}" data-item="${esc(m.item)}" data-cat="${esc(m.cat)}" aria-label="加入 ${esc(m.item)}">${I.plus}</button>`;
       h += `<div class="mrow ${myQty ? 'has' : ''}">
-        <button class="mtap" data-act="item" data-item="${esc(m.item)}" ${open ? '' : 'disabled'}>
+        <button class="mtap" data-act="item" data-item="${esc(m.item)}" data-cat="${esc(m.cat)}" ${open ? '' : 'disabled'}>
           <span class="mname">${esc(m.item)}</span>
-          <span class="msub">${price}${m.desc ? `<span>${esc(m.desc)}</span>` : ''}${others[m.item] >= 2 ? `<span class="pop">${others[m.item]} 份</span>` : ''}</span>
+          <span class="msub">${price}${m.desc ? `<span>${esc(m.desc)}</span>` : ''}${others >= 2 ? `<span class="pop">${others} 份</span>` : ''}</span>
         </button>
         <span class="mctl">${ctl}</span>
       </div>`;
@@ -981,7 +1000,7 @@ function peopleHtml(g) {
     h += `<div class="pcard ${me ? 'me' : ''}">
       <div class="phead">${avatar(o.name)}<b>${esc(o.name)}</b>${me ? '<span class="metag">你</span>' : ''}${o.updatedAt ? `<small class="num">${fmtTime(o.updatedAt)}</small>` : ''}<span class="spacer"></span><span class="price">${money(o.total)}</span></div>
       <div class="plines">${o.lines.map((l, i) => `<div class="pline">
-        <div class="pl-main"><div class="pl-name">${esc(l.item)}${l.qty > 1 || l.bogo ? ` <span class="muted num">${qtyText(l)}</span>` : ''}</div>
+        <div class="pl-main"><div class="pl-name">${esc(labelOf(g.shop, l))}${l.qty > 1 || l.bogo ? ` <span class="muted num">${qtyText(l)}</span>` : ''}</div>
           ${variantText(l) ? `<div class="tags">${tagsOf(l).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
           ${l.note ? `<div class="pl-note">備註：${esc(l.note)}</div>` : ''}</div>
         ${!me && open ? `<button class="follow" data-act="follow" data-name="${esc(o.name)}" data-idx="${i}">${I.plusSm}跟點</button>` : ''}
@@ -992,11 +1011,12 @@ function peopleHtml(g) {
 }
 
 function summarize(g) {
-  const os = ordersOf(g.id), order = menuOf(g.shop).map(m => m.item);
+  const os = ordersOf(g.id), order = menuOf(g.shop).map(m => labelOf(g.shop, m));
   const items = new Map();
   os.forEach(o => o.lines.forEach(l => {
-    let it = items.get(l.item);
-    if (!it) { it = { item: l.item, qty: 0, sets: 0, vars: new Map() }; items.set(l.item, it); }
+    const name = labelOf(g.shop, l);      // 同名不同分類的品項會帶分類，例如「鍋燒類 拉麵」
+    let it = items.get(name);
+    if (!it) { it = { item: name, qty: 0, sets: 0, vars: new Map() }; items.set(name, it); }
     it.qty += cupsOf(l);
     // 買一送一拆成兩杯各自統計（兩杯口味可能不同），店家照杯數做
     const cups = l.bogo ? [l.opts || [], cup2Of(l)] : [l.opts || []];
@@ -1146,12 +1166,12 @@ function needPin() {
   });
 }
 
-function openItem(gid, itemName, editIdx) {
+function openItem(gid, itemName, editIdx, cat) {
   const g = S.data.groups.find(x => x.id === gid); if (!g || !isOpen(g)) return;
-  if (!S.me) return askName(() => openItem(gid, itemName, editIdx));
-  const shop = shopOf(g), m = menuOf(g.shop).find(x => x.item === itemName); if (!m) return;
+  if (!S.me) return askName(() => openItem(gid, itemName, editIdx, cat));
+  const shop = shopOf(g), m = findMenu(g.shop, { item: itemName, cat }); if (!m) return;
   const drink = shop.type === '飲料', groups = optionsFor(shop);
-  const sz = sizesOf(m), disc = parseDisc(m.disc), pr = promoOf(g, m.item);
+  const sz = sizesOf(m), disc = parseDisc(m.disc), pr = promoOf(g, m), label = labelOf(g.shop, m);
   const prSize = pr && m.priceL && sz.includes(pr.size) ? pr.size : '';     // 買一送一限定的容量（例如只有 L）
   const base = editIdx != null ? myLines(gid)[editIdx] : null;
   const st = { size: m.priceL ? (base && sz.includes(base.size) ? base.size : sz[0]) : '', qty: base ? base.qty : 1, sel: { 1: {}, 2: {} } };
@@ -1172,7 +1192,7 @@ function openItem(gid, itemName, editIdx) {
   const optsHtml = () => groups.map(gr => `<div class="ogrp" data-g="${esc(gr.name)}"><div class="ogrp-h"><span>${esc(gr.name)}</span><span class="req ${gr.required ? 'must' : ''}">${gr.required ? '必選' : gr.multi ? '可複選' : '選填'}</span></div>
       <div class="chips">${gr.items.map(i => `<button class="chip" data-opt="${esc(i.label)}">${esc(i.label)}${i.add ? ` <small>+${i.add}</small>` : ''}</button>`).join('')}</div></div>`).join('');
   const html = `
-    <h2 class="sh-h">${esc(m.item)}</h2>
+    <h2 class="sh-h">${esc(label)}</h2>
     <div class="sh-sub">${m.desc ? esc(m.desc) + ' · ' : ''}${m.priceL ? `${esc(sz[0])} ${money(p1)} / ${esc(sz[1])} ${money(p2)}` : money(p1)}${disc ? ' · 已' + discText(disc) : ''}</div>
     ${pr ? `<div class="ogrp" data-g="__plan"><div class="ogrp-h"><span>今日${BOGO}${prSize ? '（限 ' + esc(prSize) + '）' : ''}</span><span class="req must">${pr.only ? '只能點' + BOGO : '必選'}</span></div><div class="chips">
       <button class="chip" data-plan="1">${BOGO}（2 杯）</button>${pr.only ? '' : `<button class="chip" data-plan="0">單杯</button>`}</div>
@@ -1206,7 +1226,7 @@ function openItem(gid, itemName, editIdx) {
         $('#it-q', root).textContent = st.bogo ? st.qty + ' 組' : st.qty;
         $('#it-add', root).textContent = (base ? '更新 · ' : '加入 · ') + (st.bogo ? st.qty * 2 + ' 杯 ' : '') + money(unit() * st.qty);
         if (drink) {
-          $('#tl-item', root).textContent = m.item + (st.size ? ' ' + st.size : '') + (st.bogo ? ' ×2' : '');
+          $('#tl-item', root).textContent = label + (st.size ? ' ' + st.size : '') + (st.bogo ? ' ×2' : '');
           const o1 = opts(1), o2 = opts(2), el = $('#tl-opts', root);
           el.textContent = !o1.length ? '還沒選甜度、冰塊' : twoCups() ? '①' + o1.join(' / ') + '　②' + (o2.join(' / ') || '還沒選') : o1.join(' / ');
           el.classList.toggle('ph', !o1.length);
@@ -1244,13 +1264,13 @@ function openItem(gid, itemName, editIdx) {
               return toast((twoCups() ? '第 ' + c + ' 杯' : '') + '還沒選' + miss.map(x => x.name).join('、'));
             }
           }
-          const line = { item: m.item, bogo: st.bogo, size: m.priceL ? st.size : '', opts: opts(1), opts2: twoCups() ? opts(2) : [], unit: unit(), qty: st.qty, note: $('#it-note', root).value.trim() };
+          const line = { item: m.item, cat: m.cat, bogo: st.bogo, size: m.priceL ? st.size : '', opts: opts(1), opts2: twoCups() ? opts(2) : [], unit: unit(), qty: st.qty, note: $('#it-note', root).value.trim() };
           const lines = myLines(gid);
           if (base) lines.splice(editIdx, 1);
           const same = lines.find(l => lineKey(l) === lineKey(line));
           if (same) same.qty += line.qty; else if (base) lines.splice(editIdx, 0, line); else lines.push(line);
           if (base) { setMine(gid, lines); openCart(); toast('已更新'); }
-          else { closeSheet(); setMine(gid, lines); toast('已加入 ' + m.item); }
+          else { closeSheet(); setMine(gid, lines); toast('已加入 ' + label); }
         }
       });
     },
@@ -1267,7 +1287,7 @@ function openCart(keepScroll) {
     <h2 class="sh-h">我的訂單</h2>
     <div class="sh-sub">${esc(g.shop)} · <span class="num">${fmtTime(g.deadline)}</span> 截止${ps && ps.k !== 'unpaid' ? ' · ' + ps.t : ''}</div>
     <div class="clist">${lines.map((l, i) => `<div class="cline">
-      <div class="cl-main"><div class="cl-name">${esc(l.item)}</div>
+      <div class="cl-main"><div class="cl-name">${esc(labelOf(g.shop, l))}</div>
         ${variantText(l) ? `<div class="tags">${tagsOf(l).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
         ${l.note ? `<div class="pl-note">備註：${esc(l.note)}</div>` : ''}
         <div class="cl-price num">${money(l.unit)} × ${l.qty}${l.bogo ? ' 組（' + l.qty * 2 + ' 杯）' : ''} = <b>${money(l.unit * l.qty)}</b></div></div>
@@ -1362,7 +1382,7 @@ function openSecHtml(type) {
   let h = `<div class="osec"><div class="osec-h"><span class="glyph xs ${drink ? 'drink' : 'bento'}">${drink ? ART.tea : ART.bento}</span><b>${type}</b>${F.shop ? '' : '<span class="muted">不開就留空</span>'}</div>`;
   if (!F.shop) return h + `<input class="field" type="search" data-f="osq" data-type="${type}" value="${esc(F.q)}" placeholder="搜尋${type}店，打幾個字就好" autocomplete="off" aria-label="搜尋${type}店">
     <div class="sugg-list" data-sugg="${type}">${suggestHtml(type)}</div></div>`;
-  const items = menuOf(F.shop), picked = new Set(F.promos.map(p => p.item)), left = items.filter(m => !picked.has(m.item));
+  const items = menuOf(F.shop), left = items.filter(m => !F.promos.some(p => sameItem(p, m)));
   const cats = [...new Set(items.map(m => m.cat || '其他'))];
   return h + `<div class="picked"><b>${esc(F.shop)}</b><button class="sbtn" data-act="o-clear" data-type="${type}">換一家</button></div>
     <label class="lbl">截止時間</label>
@@ -1375,11 +1395,11 @@ function openSecHtml(type) {
     <label class="lbl">今日${BOGO} <span class="muted" style="font-weight:400">選填</span></label>
     ${left.length ? `<div class="tpick psel"><select class="field" data-f="opitem" data-type="${type}" aria-label="買一送一品項"><option value="">選品項…</option>${cats.map(c => {
       const os = left.filter(m => (m.cat || '其他') === c);
-      return os.length ? `<optgroup label="${esc(c)}">${os.map(m => `<option value="${esc(m.item)}">${esc(m.item)}</option>`).join('')}</optgroup>` : '';
+      return os.length ? `<optgroup label="${esc(c)}">${os.map(m => `<option value="${items.indexOf(m)}">${esc(m.item)}</option>`).join('')}</optgroup>` : '';
     }).join('')}</select><button class="btn auto ghost" data-act="promo-add" data-type="${type}">加入</button></div>` : ''}
     ${F.promos.map((p, i) => {
-      const pm = items.find(x => x.item === p.item), psz = pm && pm.priceL ? sizesOf(pm) : [];
-      return `<div class="prm"><div class="arow"><div class="t"><b>${esc(p.item)}</b><small>${p.size ? '限 ' + esc(p.size) + '，' : ''}${p.only ? '只能點' + BOGO + '，不能單杯' : '也可以點單杯'}</small></div>
+      const pm = items.find(x => sameItem(x, p)), psz = pm && pm.priceL ? sizesOf(pm) : [];
+      return `<div class="prm"><div class="arow"><div class="t"><b>${esc(labelOf(F.shop, p))}</b><small>${p.size ? '限 ' + esc(p.size) + '，' : ''}${p.only ? '只能點' + BOGO + '，不能單杯' : '也可以點單杯'}</small></div>
       <span class="muted" style="font-size:12.5px">只能${BOGO}</span><button class="tog ${p.only ? 'on' : ''}" data-act="promo-only" data-type="${type}" data-i="${i}" aria-label="只能點${BOGO}"></button>
       <button class="mini del" data-act="promo-del" data-type="${type}" data-i="${i}" aria-label="移除">${I.x}</button></div>
       ${psz.length ? `<div class="chips sm prm-sz"><span class="muted">${BOGO}限定</span>${psz.map(s => `<button class="chip ${p.size === s ? 'on' : ''}" data-act="promo-size" data-type="${type}" data-i="${i}" data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div>` : ''}</div>`;
@@ -1425,13 +1445,13 @@ function startEdit(name) {
     let c = cats.find(x => x.name === m.cat);
     if (!c) {
       const d = parseDisc(m.disc);
-      c = { name: m.cat, sizes: ['M', 'L'], disc: d ? { kind: d.kind, n: String(d.kind === 'pct' && d.n % 10 === 0 ? d.n / 10 : d.n) } : blankDisc(), items: [] };
+      c = { name: m.cat, sizes: defSizes(s.type), disc: d ? { kind: d.kind, n: String(d.kind === 'pct' && d.n % 10 === 0 ? d.n / 10 : d.n) } : blankDisc(), items: [] };
       cats.push(c);
     }
     if (m.priceL) c.sizes = sizesOf(m);
     c.items.push({ item: m.item, price: String(m.price), priceL: m.priceL ? String(m.priceL) : '', desc: m.desc || '' });
   });
-  if (!cats.length) cats.push({ name: '主餐', sizes: ['M', 'L'], disc: blankDisc(), items: [blankItem()] });
+  if (!cats.length) cats.push({ name: '主餐', sizes: defSizes(s ? s.type : '便當'), disc: blankDisc(), items: [blankItem()] });
   S.edit = { orig: s ? s.name : null, shop: { name: s ? s.name : '', type: s ? s.type : '便當', phone: s ? s.phone || '' : '', note: s ? s.note || '' : '', disabled: !!(s && s.disabled) }, cats, dirty: false, saving: false };
   location.hash = 'shop';
 }
@@ -1449,17 +1469,17 @@ function shopEditHtml() {
     <div class="switch-row"><span><b>暫停使用</b><small>開團時看不到這家店，菜單會保留</small></span><button class="tog ${s.disabled ? 'on' : ''}" data-act="ed-disable" aria-label="暫停使用"></button></div>
   </div>
   <div class="sect-h"><h2>菜單</h2><span class="num">${n} 個品項</span><span class="spacer"></span><button class="sbtn" data-act="ed-import">貼上匯入</button></div>
-  ${drink ? '<div class="hint" style="margin:-4px 2px 0">每個分類可以設定兩種容量的名稱，例如「M / L」或「L / 瓶」。只有一種容量的品項，第二格價格留空。</div>' : ''}
+  <div class="hint" style="margin:-4px 2px 0">每個分類可以設定兩種份量的名稱，例如「${drink ? 'M / L」或「L / 瓶' : '小 / 大'}」。只有一種份量的品項，第二格價格留空。不同分類可以有同名的品項。</div>
   ${E.cats.map((c, ci) => `<div class="ecat">
     <div class="ecat-h"><input class="field" data-f="cat" data-ci="${ci}" maxlength="20" value="${esc(c.name)}" placeholder="分類名稱，例如：主餐" aria-label="分類名稱">
       <button class="mini" data-act="ec-up" data-ci="${ci}" ${ci ? '' : 'disabled'} aria-label="分類上移">${I.up}</button><button class="mini" data-act="ec-down" data-ci="${ci}" ${ci < E.cats.length - 1 ? '' : 'disabled'} aria-label="分類下移">${I.down}</button><button class="mini del" data-act="ec-del" data-ci="${ci}" aria-label="刪除分類">${I.x}</button></div>
-    ${drink ? `<div class="szrow"><span>容量名稱</span><input class="field" data-f="sz0" data-ci="${ci}" maxlength="4" value="${esc(c.sizes[0])}" aria-label="第一種容量"><span>/</span><input class="field" data-f="sz1" data-ci="${ci}" maxlength="4" value="${esc(c.sizes[1])}" aria-label="第二種容量"></div>` : ''}
+    <div class="szrow"><span>份量名稱</span><input class="field" data-f="sz0" data-ci="${ci}" maxlength="4" value="${esc(c.sizes[0])}" aria-label="第一種份量"><span>/</span><input class="field" data-f="sz1" data-ci="${ci}" maxlength="4" value="${esc(c.sizes[1])}" aria-label="第二種份量"></div>
     <div class="szrow"><span>優惠</span><select class="field dsel" data-f="dkind" data-ci="${ci}" aria-label="優惠方式"><option value="" ${c.disc.kind ? '' : 'selected'}>無</option><option value="minus" ${c.disc.kind === 'minus' ? 'selected' : ''}>每份減</option><option value="pct" ${c.disc.kind === 'pct' ? 'selected' : ''}>打折</option></select>
       ${c.disc.kind ? `<input class="field" data-f="dn" data-ci="${ci}" inputmode="numeric" maxlength="3" value="${esc(c.disc.n)}" placeholder="${c.disc.kind === 'pct' ? '9' : '5'}" aria-label="優惠數字"><span>${c.disc.kind === 'pct' ? '折' : '元'}</span>` : ''}</div>
     ${c.items.map((it, ii) => `<div class="erow" data-ci="${ci}" data-ii="${ii}">
       <div class="erow-1"><input class="field" data-f="item" maxlength="40" value="${esc(it.item)}" placeholder="品名" aria-label="品名">
-        <label class="money-in"><span class="lab0">${drink ? esc(c.sizes[0]) : '$'}</span><input data-f="price" inputmode="numeric" value="${esc(it.price)}" placeholder="價格" aria-label="價格"></label>
-        ${drink ? `<label class="money-in"><span class="lab1">${esc(c.sizes[1])}</span><input data-f="priceL" inputmode="numeric" value="${esc(it.priceL)}" placeholder="—" aria-label="第二種容量價格"></label>` : ''}</div>
+        <label class="money-in"><span class="lab0">${esc(c.sizes[0])}</span><input data-f="price" inputmode="numeric" value="${esc(it.price)}" placeholder="價格" aria-label="價格"></label>
+        <label class="money-in"><span class="lab1">${esc(c.sizes[1])}</span><input data-f="priceL" inputmode="numeric" value="${esc(it.priceL)}" placeholder="—" aria-label="第二種份量價格"></label></div>
       <div class="erow-2"><input class="field sm" data-f="desc" maxlength="40" value="${esc(it.desc)}" placeholder="說明（選填）" aria-label="說明">
         <button class="mini" data-act="ei-up" ${ii ? '' : 'disabled'} aria-label="上移">${I.up}</button><button class="mini" data-act="ei-down" ${ii < c.items.length - 1 ? '' : 'disabled'} aria-label="下移">${I.down}</button><button class="mini del" data-act="ei-del" aria-label="刪除品項">${I.x}</button></div>
     </div>`).join('')}
@@ -1478,12 +1498,12 @@ async function saveShop() {
   const E = S.edit, name = E.shop.name.trim();
   if (!name) return markBad('#ed-name', '請填店名');
   if (S.data.shops.some(s => s.name === name && s.name !== E.orig)) return markBad('#ed-name', '已經有「' + name + '」了');
-  const items = [], seen = new Set(), drink = E.shop.type === '飲料';
+  const items = [], seen = new Set();
   for (let ci = 0; ci < E.cats.length; ci++) {
-    const c = E.cats[ci], s0 = c.sizes[0].trim(), s1 = c.sizes[1].trim();
-    if (drink && c.items.some(i => i.item.trim() && i.priceL)) {
-      if (!s0 || !s1) return markBad(`[data-f="${s0 ? 'sz1' : 'sz0'}"][data-ci="${ci}"]`, '「' + (c.name || '這個分類') + '」的容量名稱沒填');
-      if (s0 === s1) return markBad(`[data-f="sz1"][data-ci="${ci}"]`, '兩種容量的名稱不能一樣');
+    const c = E.cats[ci], s0 = c.sizes[0].trim(), s1 = c.sizes[1].trim(), cat = c.name.trim() || '其他';
+    if (c.items.some(i => i.item.trim() && i.priceL)) {
+      if (!s0 || !s1) return markBad(`[data-f="${s0 ? 'sz1' : 'sz0'}"][data-ci="${ci}"]`, '「' + (c.name || '這個分類') + '」的份量名稱沒填');
+      if (s0 === s1) return markBad(`[data-f="sz1"][data-ci="${ci}"]`, '兩種份量的名稱不能一樣');
     }
     const disc = discCode(c.disc);
     if (disc === null) return markBad(`[data-f="dn"][data-ci="${ci}"]`, '「' + (c.name || '這個分類') + '」的優惠數字不對');
@@ -1492,9 +1512,9 @@ async function saveShop() {
       if (!nm && !it.price && !it.desc.trim()) continue;
       if (!nm) return markBad(row + ' [data-f="item"]', '有品項沒填名字');
       if (it.price === '') return markBad(row + ' [data-f="price"]', '「' + nm + '」沒填價格');
-      if (seen.has(nm)) return markBad(row + ' [data-f="item"]', '「' + nm + '」重複了');
-      seen.add(nm);
-      items.push({ cat: c.name.trim() || '其他', item: nm, price: +it.price, priceL: +it.priceL || 0, desc: it.desc.trim(), sizes: s0 + '/' + s1, disc });
+      if (seen.has(cat + '|' + nm)) return markBad(row + ' [data-f="item"]', '「' + cat + '」裡的「' + nm + '」重複了');   // 不同分類可以同名
+      seen.add(cat + '|' + nm);
+      items.push({ cat, item: nm, price: +it.price, priceL: +it.priceL || 0, desc: it.desc.trim(), sizes: s0 + '/' + s1, disc });
     }
   }
   if (!items.length) return toast('菜單至少要有一個品項');
@@ -1507,8 +1527,8 @@ async function saveShop() {
   E.saving = false; renderBar();
 }
 
-// 「# 分類 L/瓶」：分類後面可以接兩種容量的名稱
-function parseMenu(text, drink) {
+// 「# 分類 L/瓶」「# 拉麵類 小/大」：分類後面可以接兩種份量的名稱
+function parseMenu(text) {
   let cat = '主餐', sizes = null; const out = [];
   String(text || '').split(/\r?\n/).forEach(raw => {
     const l = raw.trim(); if (!l) return;
@@ -1521,29 +1541,28 @@ function parseMenu(text, drink) {
     }
     const m = l.match(/^(.+?)\s+\$?(\d+)(?:\s+\$?(\d+)(?=\s|$))?(?:\s+(.*))?$/);
     if (!m) return;
-    let priceL = m[3] ? +m[3] : 0, desc = (m[4] || '').trim();
-    if (!drink && m[3]) { desc = (m[3] + ' ' + desc).trim(); priceL = 0; }
+    const priceL = m[3] ? +m[3] : 0, desc = (m[4] || '').trim();
     out.push({ cat, sizes, item: m[1].trim(), price: +m[2], priceL, desc });
   });
   return out;
 }
 function openImport() {
   const drink = S.edit.shop.type === '飲料';
-  const ph = drink ? '# 奶茶 M/L&#10;珍珠奶茶 50 60&#10;烏龍拿鐵 60 70 鮮奶&#10;# 純茶 L/瓶&#10;四季春 30 45' : '# 主餐&#10;雞腿飯 110 炸雞腿、三樣配菜&#10;排骨飯 95&#10;# 湯品&#10;貢丸湯 30';
+  const ph = drink ? '# 奶茶 M/L&#10;珍珠奶茶 50 60&#10;烏龍拿鐵 60 70 鮮奶&#10;# 純茶 L/瓶&#10;四季春 30 45' : '# 主餐&#10;雞腿飯 110 炸雞腿、三樣配菜&#10;排骨飯 95&#10;# 鍋燒類 小/大&#10;拉麵 90 100&#10;# 湯品&#10;貢丸湯 30';
   openSheet('import', `<h2 class="sh-h">貼上匯入</h2><div class="sh-sub">一次貼上整份菜單，匯入後還能逐項修改。</div>
     <textarea class="field" id="im-t" style="margin-top:14px" placeholder="${ph}"></textarea>
-    <div class="hint">一行一個品項：${drink ? '「品名 價格 第二種容量價格 說明」，只有一種容量就寫一個價格' : '「品名 價格 說明」'}，說明可以不寫。「#」開頭的行是分類${drink ? '，分類後面可以寫容量名稱，例如「# 純茶 L/瓶」，沒寫就是 M/L' : ''}。<b id="im-n"></b></div>
+    <div class="hint">一行一個品項：「品名 價格 說明」，有兩種份量就寫「品名 價格 第二種價格 說明」，說明可以不寫，開頭不能是數字。「#」開頭的行是分類，後面可以寫份量名稱，例如「# 純茶 L/瓶」「# 鍋燒類 小/大」。不同分類可以有同名品項。<b id="im-n"></b></div>
     <div class="sheet-foot"><button class="btn" id="im-ok" disabled>加入菜單</button></div>`, {
     mount(root) {
       const ta = $('#im-t', root), ok = $('#im-ok', root);
-      ta.addEventListener('input', () => { const n = parseMenu(ta.value, drink).length; $('#im-n', root).textContent = n ? ' 讀到 ' + n + ' 個品項。' : ''; ok.disabled = !n; });
+      ta.addEventListener('input', () => { const n = parseMenu(ta.value).length; $('#im-n', root).textContent = n ? ' 讀到 ' + n + ' 個品項。' : ''; ok.disabled = !n; });
       ok.addEventListener('click', () => {
-        const items = parseMenu(ta.value, drink), E = S.edit;
+        const items = parseMenu(ta.value), E = S.edit;
         E.cats.forEach(c => { c.items = c.items.filter(i => i.item.trim() || i.price || i.desc.trim()); });
         E.cats = E.cats.filter(c => c.items.length);
         items.forEach(it => {
           let c = E.cats.find(x => x.name.trim() === it.cat);
-          if (!c) { c = { name: it.cat, sizes: ['M', 'L'], disc: blankDisc(), items: [] }; E.cats.push(c); }
+          if (!c) { c = { name: it.cat, sizes: defSizes(E.shop.type), disc: blankDisc(), items: [] }; E.cats.push(c); }
           if (it.sizes) c.sizes = it.sizes.slice();
           c.items.push({ item: it.item, price: String(it.price), priceL: it.priceL ? String(it.priceL) : '', desc: it.desc });
         });
@@ -1636,8 +1655,8 @@ const ADMIN_ACT = {
   'promo-add': el => {
     const t = el.dataset.type, v = $(`[data-f="opitem"][data-type="${t}"]`).value;
     if (!v) return toast('先選一個品項');
-    const m = menuOf(S.openForm[t].shop).find(x => x.item === v);
-    S.openForm[t].promos.push({ item: v, only: true, size: m && m.priceL ? sizesOf(m)[0] : '' }); repaintOpen();   // 預設限第一種容量（通常是 L）
+    const m = menuOf(S.openForm[t].shop)[+v]; if (!m) return;
+    S.openForm[t].promos.push({ item: m.item, cat: m.cat, only: true, size: m.priceL ? sizesOf(m)[0] : '' }); repaintOpen();   // 預設限第一種容量（通常是 L）
   },
   'promo-size': el => { S.openForm[el.dataset.type].promos[+el.dataset.i].size = el.dataset.v; repaintOpen(); },
   'promo-only': el => { const p = S.openForm[el.dataset.type].promos[+el.dataset.i]; p.only = !p.only; repaintOpen(); },
@@ -1692,7 +1711,7 @@ const ADMIN_ACT = {
     if (n && !(await confirmSheet('刪除分類', '「' + (c.name || '未命名') + '」裡的 ' + n + ' 個品項會一起刪除（按儲存後才生效）。', '刪除', true))) return;
     edChange(() => S.edit.cats.splice(+el.dataset.ci, 1));
   },
-  'ec-add': () => { edChange(() => S.edit.cats.push({ name: '', sizes: ['M', 'L'], disc: blankDisc(), items: [blankItem()] })); focusLater(`[data-f="cat"][data-ci="${S.edit.cats.length - 1}"]`); },
+  'ec-add': () => { edChange(() => S.edit.cats.push({ name: '', sizes: defSizes(S.edit.shop.type), disc: blankDisc(), items: [blankItem()] })); focusLater(`[data-f="cat"][data-ci="${S.edit.cats.length - 1}"]`); },
   'ei-add': el => {
     const ci = +el.dataset.ci; edChange(() => S.edit.cats[ci].items.push(blankItem()));
     focusLater(`.erow[data-ci="${ci}"][data-ii="${S.edit.cats[ci].items.length - 1}"] [data-f="item"]`);
@@ -1809,7 +1828,7 @@ function inviteText(gs) {
   const out = ['今天揪團囉，截止前都能點、能改：'];
   gs.forEach(g => {
     out.push('', `【${g.shop}】${fmtTime(g.deadline)} 截止`);
-    if ((g.promos || []).length) out.push(BOGO + '：' + g.promos.map(p => p.item + (p.size ? ' ' + p.size : '')).join('、'));
+    if ((g.promos || []).length) out.push(BOGO + '：' + g.promos.map(p => labelOf(g.shop, p) + (p.size ? ' ' + p.size : '')).join('、'));
     if (g.note) out.push(g.note);
   });
   out.push('', '點餐 👉 ' + (gs.length === 1 ? groupUrl(gs[0]) : SITE));
@@ -1842,18 +1861,18 @@ const ACT = {
   back: () => { if (location.hash) location.hash = ''; else route(); },
   tab: el => { S.tab = el.dataset.tab; renderTop(); renderMain(); window.scrollTo(0, 0); },
   cat: el => { const s = $('#cat-' + el.dataset.i); if (s) s.scrollIntoView({ behavior: 'smooth', block: 'start' }); },
-  item: el => openItem(S.gid, el.dataset.item),
+  item: el => openItem(S.gid, el.dataset.item, null, el.dataset.cat),
   quick: el => {
     if (!S.me) return askName(() => ACT.quick(el));
-    const g = curGroup(), m = g && menuOf(g.shop).find(x => x.item === el.dataset.item); if (!m || !isOpen(g)) return;
-    const lines = myLines(g.id), same = lines.find(l => l.item === m.item && !l.size && !l.opts.length && !l.note && !l.bogo);
-    if (same) same.qty++; else lines.push({ item: m.item, size: '', opts: [], unit: applyDisc(m.price, parseDisc(m.disc)), qty: 1, note: '' });
-    setMine(g.id, lines); toast('已加入 ' + m.item);
+    const g = curGroup(), m = g && findMenu(g.shop, { item: el.dataset.item, cat: el.dataset.cat }); if (!m || !isOpen(g)) return;
+    const lines = myLines(g.id), same = lines.find(l => sameItem(l, m) && !l.size && !l.opts.length && !l.note && !l.bogo);
+    if (same) same.qty++; else lines.push({ item: m.item, cat: m.cat, size: '', opts: [], unit: applyDisc(m.price, parseDisc(m.disc)), qty: 1, note: '' });
+    setMine(g.id, lines); toast('已加入 ' + labelOf(g.shop, m));
     try { navigator.vibrate && navigator.vibrate(8); } catch (e) { }
   },
   inc: el => { const g = curGroup(), lines = myLines(g.id), l = lines[+el.dataset.idx]; if (l && isOpen(g)) { l.qty = Math.min(50, l.qty + 1); setMine(g.id, lines); } },
   dec: el => { const g = curGroup(), lines = myLines(g.id), l = lines[+el.dataset.idx]; if (l && isOpen(g)) { l.qty--; setMine(g.id, lines); } },
-  'edit-line': el => { const g = curGroup(), l = myLines(g.id)[+el.dataset.idx]; if (l) openItem(g.id, l.item, +el.dataset.idx); },
+  'edit-line': el => { const g = curGroup(), l = myLines(g.id)[+el.dataset.idx]; if (l) openItem(g.id, l.item, +el.dataset.idx, l.cat); },
   cart: () => openCart(),
   follow: el => {
     if (!S.me) return askName(() => ACT.follow(el));
@@ -1862,7 +1881,7 @@ const ACT = {
     const line = Object.assign({}, src, { opts: src.opts.slice(), qty: 1, note: '' });
     const lines = myLines(g.id), same = lines.find(l => lineKey(l) === lineKey(line));
     if (same) same.qty++; else lines.push(line);
-    setMine(g.id, lines); toast('跟點了 ' + [line.item, variantText(line)].filter(Boolean).join(' '));
+    setMine(g.id, lines); toast('跟點了 ' + [labelOf(g.shop, line), variantText(line)].filter(Boolean).join(' '));
   },
   me: () => askName(),
   admin: async () => { if (await needPin()) { closeSheet(); S.adminTab = 'open'; location.hash = 'admin'; } },
