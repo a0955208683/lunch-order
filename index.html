@@ -125,6 +125,21 @@ svg{display:block;flex:none}
 .glyph{width:56px;height:56px;border-radius:15px;display:grid;place-items:center;font-family:var(--f-display);font-size:29px;line-height:1}
 .glyph.bento{background:var(--leaf);color:var(--on-leaf)}
 .glyph.drink{background:var(--yolk);color:var(--on-yolk)}
+.glyph .art{width:82%;height:82%;display:block}
+.glyph.xs{width:30px;height:30px;border-radius:9px;flex:none}
+.osec-h{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.osec-h b{font-size:16px}
+.osec-h .muted{font-size:12.5px;margin-left:auto}
+.osep{height:1px;background:var(--line);margin:18px -16px}
+.sugg-list{display:flex;flex-direction:column;margin-top:6px}
+.sugg{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:9px 6px;border-radius:10px;font-weight:500}
+.sugg:active{background:var(--surface-2)}
+.sugg + .sugg{border-top:1px solid var(--line)}
+.sugg small{margin-left:auto;color:var(--muted);font-size:12px;font-weight:400}
+.sugg-empty{font-size:13px;color:var(--muted);padding:10px 6px}
+.picked{display:flex;align-items:center;gap:10px;background:var(--leaf-soft);border-radius:12px;padding:10px 10px 10px 14px}
+.picked b{flex:1;min-width:0;color:var(--leaf);font-size:16px}
+.tpick.psel select.field{text-align:left;text-align-last:left;padding-left:12px}
 .gc-body{min-width:0;display:flex;flex-direction:column;gap:3px}
 .gc-t{display:flex;align-items:center;gap:8px}
 .gc-t b{font-size:17px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -434,6 +449,30 @@ const I = {
   up: svg('<path d="M12 19V5M6 11l6-6 6 6"/>', 17),
   down: svg('<path d="M12 5v14M6 13l6 6 6-6"/>', 17),
   x: svg('<path d="M7 7l10 10M17 7L7 17"/>', 17),
+};
+// 店家縮圖：珍奶、便當
+const ART = {
+  tea: `<svg class="art" viewBox="0 0 48 48" aria-hidden="true">
+    <path d="M30.5 2.5l-4.2 13" stroke="#3A2416" stroke-width="3.2" stroke-linecap="round"/>
+    <path d="M13 14.5h22a2.5 2.5 0 0 1 2.5 2.5v2.5h-27V17a2.5 2.5 0 0 1 2.5-2.5z" fill="#FFFFFF"/>
+    <path d="M11.5 19.5h25l-2.7 22.3a3.2 3.2 0 0 1-3.2 2.8H17.4a3.2 3.2 0 0 1-3.2-2.8z" fill="#FFF8EC"/>
+    <path d="M12.3 25.5h23.4l-2 16.3a3.2 3.2 0 0 1-3.2 2.8H17.4a3.2 3.2 0 0 1-3.2-2.8z" fill="#C98B4E"/>
+    <path d="M12.3 25.5h23.4l-.3 2.4H12.6z" fill="#E2B07A"/>
+    <g fill="#3A2416"><circle cx="18.5" cy="40.5" r="2.3"/><circle cx="24" cy="41.3" r="2.3"/><circle cx="29.5" cy="40.5" r="2.3"/><circle cx="21.2" cy="36.6" r="2.3"/><circle cx="26.8" cy="36.8" r="2.3"/></g>
+    <path d="M15.5 21.5l1.6 18" stroke="#FFFFFF" stroke-width="1.6" stroke-linecap="round" opacity=".55"/>
+  </svg>`,
+  bento: `<svg class="art" viewBox="0 0 48 48" aria-hidden="true">
+    <path d="M30 6.5l13 6.5M27.5 8.5l13 6.5" stroke="#E9D3B0" stroke-width="2.2" stroke-linecap="round"/>
+    <rect x="4.5" y="14" width="39" height="28" rx="5" fill="#1B2A22"/>
+    <rect x="7.5" y="17" width="19" height="22" rx="2.5" fill="#FFFFFF"/>
+    <g fill="#E4E8E2"><circle cx="11.5" cy="21.5" r="1"/><circle cx="21.5" cy="22" r="1"/><circle cx="12.5" cy="34" r="1"/><circle cx="22" cy="34.5" r="1"/><circle cx="16.5" cy="36.5" r="1"/></g>
+    <circle cx="17" cy="27.5" r="3.2" fill="#D2432A"/>
+    <rect x="28.5" y="17" width="12" height="10" rx="2.5" fill="#B9652B"/>
+    <path d="M30.5 20.5c2-1.5 5.5-1.5 8 .3M30.8 24c2.2-1.2 5-1 7.5.2" stroke="#8A4417" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+    <rect x="28.5" y="29" width="12" height="10" rx="2.5" fill="#F2C94C"/>
+    <path d="M30.5 32.5h8M30.5 35.5h8" stroke="#E0A92E" stroke-width="1.2" stroke-linecap="round"/>
+    <circle cx="38.5" cy="30" r="2.6" fill="#4C9A3A"/>
+  </svg>`,
 };
 
 /* ================= 訂單計算（前端、試用後端共用） ================= */
@@ -861,7 +900,7 @@ function gcard(g, past) {
   const promoTxt = (g.promos || []).length && !past ? ' · ' + BOGO + '：' + g.promos.map(p => p.item).join('、') : '';
   return `<button class="gcard ${past ? 'past' : ''}" data-act="open-group" data-id="${esc(g.id)}">
     <div class="gc-main">
-      <span class="glyph ${drink ? 'drink' : 'bento'}">${drink ? '飲' : '便'}</span>
+      <span class="glyph ${drink ? 'drink' : 'bento'}">${drink ? ART.tea : ART.bento}</span>
       <span class="gc-body">
         <span class="gc-t"><b>${esc(g.shop)}</b>${cdHtml(g)}</span>
         <span class="gc-m num">${fmtDate(g.deadline)} ${fmtTime(g.deadline)} 截止${g.note ? ' · ' + esc(g.note) : ''}${esc(promoTxt)}</span>
@@ -1237,41 +1276,70 @@ function adminHtml() {
   return aOpenHtml();
 }
 
-function aOpenHtml() {
-  const shops = S.data.shops.filter(s => !s.disabled);
-  if (!shops.length) return `<div class="empty-st" style="margin-top:14px"><b>還沒有可以開團的店家</b><p>先到「店家」新增一家。</p><button class="btn ghost" data-act="atab" data-tab="shops">去新增店家</button></div>`;
+// 開團：便當、飲料各一區，用搜尋找店家；兩區都選了就一次開兩團
+const OTYPES = ['便當', '飲料'];
+function newOpenSec() {
   const d = new Date(now() + 60 * 60e3); d.setMinutes(d.getMinutes() < 30 ? 30 : 60, 0, 0);
-  if (!S.openForm || !shops.some(s => s.name === S.openForm.shop)) S.openForm = { shop: shops[0].name, promos: [] };
-  return `<div class="panel">
-    <label class="lbl" style="margin-top:0">店家</label>
-    <div class="chips" id="ad-shops">${shops.map(s => `<button class="chip ${s.name === S.openForm.shop ? 'on' : ''}" data-act="pick" data-shop="${esc(s.name)}">${esc(s.name)} <small>${esc(s.type)}</small></button>`).join('')}</div>
-    <label class="lbl" for="ad-h">今天幾點截止</label>
+  return { shop: '', q: '', h: d.getHours(), m: d.getMinutes(), note: '', promos: [] };
+}
+function openForm() {
+  if (!S.openForm) S.openForm = { 便當: newOpenSec(), 飲料: newOpenSec() };
+  OTYPES.forEach(t => { const F = S.openForm[t]; if (F.shop && !S.data.shops.some(s => s.name === F.shop && !s.disabled)) F.shop = ''; });
+  return S.openForm;
+}
+// 模糊搜尋：連續出現分數高、字有依序出現也算
+function fuzzy(name, q) {
+  const n = name.toLowerCase().replace(/\s/g, ''), s = q.toLowerCase().replace(/\s/g, '');
+  if (!s) return 1;
+  const i = n.indexOf(s); if (i >= 0) return 100 - i;
+  let j = 0; for (const ch of n) { if (ch === s[j]) j++; if (j === s.length) return 10; }
+  return 0;
+}
+function suggestHtml(type) {
+  const F = S.openForm[type];
+  const lastUsed = name => Math.max(0, ...S.data.groups.filter(g => g.shop === name).map(g => g.deadline));
+  const list = S.data.shops.filter(s => s.type === type && !s.disabled)
+    .map(s => ({ s, score: fuzzy(s.name, F.q), used: lastUsed(s.name) }))
+    .filter(x => x.score > 0).sort((a, b) => b.score - a.score || b.used - a.used || a.s.name.localeCompare(b.s.name, 'zh-Hant'));
+  if (!list.length) return `<div class="sugg-empty">${F.q ? '找不到「' + esc(F.q) + '」' : '還沒有' + type + '店，先到「店家」新增'}</div>`;
+  return list.slice(0, 8).map(x => `<button class="sugg" data-act="o-pick" data-type="${type}" data-shop="${esc(x.s.name)}">
+    <span class="glyph xs ${type === '飲料' ? 'drink' : 'bento'}">${type === '飲料' ? ART.tea : ART.bento}</span><span>${esc(x.s.name)}</span>${x.s.phone ? `<small>${esc(x.s.phone)}</small>` : ''}</button>`).join('')
+    + (list.length > 8 ? `<div class="sugg-empty">還有 ${list.length - 8} 家，多打幾個字縮小範圍</div>` : '');
+}
+function openSecHtml(type) {
+  const F = S.openForm[type], drink = type === '飲料';
+  let h = `<div class="osec"><div class="osec-h"><span class="glyph xs ${drink ? 'drink' : 'bento'}">${drink ? ART.tea : ART.bento}</span><b>${type}</b>${F.shop ? '' : '<span class="muted">不開就留空</span>'}</div>`;
+  if (!F.shop) return h + `<input class="field" type="search" data-f="osq" data-type="${type}" value="${esc(F.q)}" placeholder="搜尋${type}店，打幾個字就好" autocomplete="off" aria-label="搜尋${type}店">
+    <div class="sugg-list" data-sugg="${type}">${suggestHtml(type)}</div></div>`;
+  const items = menuOf(F.shop), picked = new Set(F.promos.map(p => p.item)), left = items.filter(m => !picked.has(m.item));
+  const cats = [...new Set(items.map(m => m.cat || '其他'))];
+  return h + `<div class="picked"><b>${esc(F.shop)}</b><button class="sbtn" data-act="o-clear" data-type="${type}">換一家</button></div>
+    <label class="lbl">截止時間</label>
     <div class="tpick">
-      <select class="field num" id="ad-h" aria-label="時">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === d.getHours() ? 'selected' : ''}>${pad(h)} 點</option>`).join('')}</select>
+      <select class="field num" data-f="oh" data-type="${type}" aria-label="時">${Array.from({ length: 24 }, (_, i) => `<option value="${i}" ${i === F.h ? 'selected' : ''}>${pad(i)} 點</option>`).join('')}</select>
       <span>:</span>
-      <select class="field num" id="ad-m" aria-label="分">${Array.from({ length: 12 }, (_, i) => i * 5).map(m => `<option value="${m}" ${m === d.getMinutes() ? 'selected' : ''}>${pad(m)} 分</option>`).join('')}</select>
+      <select class="field num" data-f="om" data-type="${type}" aria-label="分">${Array.from({ length: 12 }, (_, i) => i * 5).map(m => `<option value="${m}" ${m === F.m ? 'selected' : ''}>${pad(m)} 分</option>`).join('')}</select>
     </div>
-    <label class="lbl" for="ad-note">給大家的話</label><input class="field" id="ad-note" maxlength="80" placeholder="選填，例如：今天老闆加送滷蛋">
-    <div id="ad-promo">${promoFormHtml()}</div>
-    <button class="btn" style="margin-top:20px;width:100%" data-act="do-open">開團</button>
+    <label class="lbl">給大家的話</label><input class="field" data-f="onote" data-type="${type}" maxlength="80" value="${esc(F.note)}" placeholder="選填，例如：今天老闆加送滷蛋">
+    <label class="lbl">今日${BOGO} <span class="muted" style="font-weight:400">選填</span></label>
+    ${left.length ? `<div class="tpick psel"><select class="field" data-f="opitem" data-type="${type}" aria-label="買一送一品項"><option value="">選品項…</option>${cats.map(c => {
+      const os = left.filter(m => (m.cat || '其他') === c);
+      return os.length ? `<optgroup label="${esc(c)}">${os.map(m => `<option value="${esc(m.item)}">${esc(m.item)}</option>`).join('')}</optgroup>` : '';
+    }).join('')}</select><button class="btn auto ghost" data-act="promo-add" data-type="${type}">加入</button></div>` : ''}
+    ${F.promos.map((p, i) => `<div class="arow"><div class="t"><b>${esc(p.item)}</b><small>${p.only ? '只能點' + BOGO + '，不能單杯' : '可以選' + BOGO + '或單杯'}</small></div>
+      <span class="muted" style="font-size:12.5px">只能${BOGO}</span><button class="tog ${p.only ? 'on' : ''}" data-act="promo-only" data-type="${type}" data-i="${i}" aria-label="只能點${BOGO}"></button>
+      <button class="mini del" data-act="promo-del" data-type="${type}" data-i="${i}" aria-label="移除">${I.x}</button></div>`).join('')}
+    ${F.promos.length ? '' : `<div class="hint">${BOGO}：一組 2 杯同款同容量，付原價（不打折）。</div>`}
   </div>`;
 }
-// 開團時的「今日買一送一」：只對這一團有效
-function promoFormHtml() {
-  const F = S.openForm, items = menuOf(F.shop), picked = new Set(F.promos.map(p => p.item));
-  const cats = [...new Set(items.map(m => m.cat || '其他'))];
-  const left = items.filter(m => !picked.has(m.item));
-  return `<label class="lbl" for="ad-pitem">今日${BOGO} <span class="muted" style="font-weight:400">選填</span></label>
-    ${left.length ? `<div class="tpick"><select class="field" id="ad-pitem"><option value="">選品項…</option>${cats.map(c => {
-      const opts = left.filter(m => (m.cat || '其他') === c);
-      return opts.length ? `<optgroup label="${esc(c)}">${opts.map(m => `<option value="${esc(m.item)}">${esc(m.item)}</option>`).join('')}</optgroup>` : '';
-    }).join('')}</select><button class="btn auto ghost" data-act="promo-add">加入</button></div>` : ''}
-    ${F.promos.map((p, i) => `<div class="arow"><div class="t"><b>${esc(p.item)}</b><small>${p.only ? '只能點' + BOGO + '，不能單杯' : '可以選' + BOGO + '或單杯'}</small></div>
-      <span class="muted" style="font-size:12.5px">只能${BOGO}</span><button class="tog ${p.only ? 'on' : ''}" data-act="promo-only" data-i="${i}" aria-label="只能點${BOGO}"></button>
-      <button class="mini del" data-act="promo-del" data-i="${i}" aria-label="移除">${I.x}</button></div>`).join('')}
-    <div class="hint">${BOGO}：一組 2 杯同款同容量，付原價（不打折）。</div>`;
+function aOpenHtml() {
+  if (!S.data.shops.some(s => !s.disabled)) return `<div class="empty-st" style="margin-top:14px"><b>還沒有可以開團的店家</b><p>先到「店家」新增一家。</p><button class="btn ghost" data-act="atab" data-tab="shops">去新增店家</button></div>`;
+  const F = openForm(), n = OTYPES.filter(t => F[t].shop).length;
+  return `<div class="panel">${OTYPES.map(openSecHtml).join('<div class="osep"></div>')}
+    <button class="btn" style="margin-top:20px;width:100%" data-act="do-open" ${n ? '' : 'disabled'}>${n === 2 ? '一起開 2 團' : n ? '開團' : '先選一家店'}</button>
+  </div>`;
 }
-const repaintPromo = () => { const el = $('#ad-promo'); if (el) el.innerHTML = promoFormHtml(); };
+const repaintOpen = () => { if (S.view === 'admin' && S.adminTab === 'open') renderMain(); };
 
 function aGroupsHtml() {
   const gs = S.data.groups.slice().sort((a, b) => b.deadline - a.deadline);
@@ -1288,7 +1356,7 @@ function aShopsHtml() {
   return `<div class="list" style="margin-top:14px">${S.data.shops.map(s => {
     const n = menuOf(s.name).length, drink = s.type === '飲料';
     return `<button class="scard ${s.disabled ? 'off' : ''}" data-act="edit-shop" data-name="${esc(s.name)}">
-      <span class="glyph sm ${drink ? 'drink' : 'bento'}">${drink ? '飲' : '便'}</span>
+      <span class="glyph sm ${drink ? 'drink' : 'bento'}">${drink ? ART.tea : ART.bento}</span>
       <span class="sc-b"><b>${esc(s.name)}</b><small class="num">${n} 個品項${s.phone ? ' · ' + esc(s.phone) : ''}</small></span>
       ${s.disabled ? '<span class="st unpaid">暫停</span>' : ''}${I.chev}</button>`;
   }).join('')}
@@ -1508,26 +1576,31 @@ const ADMIN_ACT = {
     if (isDirty() && !(await askDiscard())) return;
     clearDirty(); S.adminTab = k; render(); window.scrollTo(0, 0);
   },
-  pick: el => {
-    $$('.chip', el.parentElement).forEach(c => c.classList.toggle('on', c === el));
-    if (el.dataset.shop && el.dataset.shop !== S.openForm.shop) { S.openForm = { shop: el.dataset.shop, promos: [] }; repaintPromo(); }
+  'o-pick': el => { const F = S.openForm[el.dataset.type]; F.shop = el.dataset.shop; F.q = ''; F.promos = []; repaintOpen(); },
+  'o-clear': el => { const F = S.openForm[el.dataset.type]; F.shop = ''; F.promos = []; repaintOpen(); focusLater(`[data-f="osq"][data-type="${el.dataset.type}"]`); },
+  'promo-add': el => {
+    const t = el.dataset.type, v = $(`[data-f="opitem"][data-type="${t}"]`).value;
+    if (!v) return toast('先選一個品項');
+    S.openForm[t].promos.push({ item: v, only: true }); repaintOpen();
   },
-  'promo-add': () => {
-    const v = $('#ad-pitem').value; if (!v) return toast('先選一個品項');
-    S.openForm.promos.push({ item: v, only: true }); repaintPromo();
-  },
-  'promo-only': el => { const p = S.openForm.promos[+el.dataset.i]; p.only = !p.only; repaintPromo(); },
-  'promo-del': el => { S.openForm.promos.splice(+el.dataset.i, 1); repaintPromo(); },
+  'promo-only': el => { const p = S.openForm[el.dataset.type].promos[+el.dataset.i]; p.only = !p.only; repaintOpen(); },
+  'promo-del': el => { S.openForm[el.dataset.type].promos.splice(+el.dataset.i, 1); repaintOpen(); },
   'do-open': async el => {
-    const shop = S.openForm.shop;
-    const d = new Date(); d.setHours(+$('#ad-h').value, +$('#ad-m').value, 0, 0);
-    if (d.getTime() <= now()) return toast('這個時間已經過了，請選晚一點');
+    const secs = OTYPES.map(t => S.openForm[t]).filter(F => F.shop);
+    for (const F of secs) {
+      const d = new Date(); d.setHours(F.h, F.m, 0, 0); F.dl = d.getTime();
+      if (F.dl <= now()) return toast('「' + F.shop + '」的截止時間已經過了，請選晚一點');
+    }
     el.disabled = true;
+    const ids = [], names = secs.map(F => F.shop);
     try {
-      const r = await api('openGroup', { pin: PIN, shop, deadline: d.getTime(), note: $('#ad-note').value.trim(), promos: S.openForm.promos });
-      S.openForm = null; toast('開團了：' + shop); await refresh();
-      location.hash = r.id ? 'g-' + r.id : '';
-    } catch (err) { toast(err.message || '沒有成功，再試一次'); el.disabled = false; }
+      for (const F of secs) {
+        const r = await api('openGroup', { pin: PIN, shop: F.shop, deadline: F.dl, note: F.note.trim(), promos: F.promos });
+        ids.push(r.id); F.shop = ''; F.promos = []; F.note = '';      // 開成功的就清掉，失敗重按不會重複開
+      }
+      S.openForm = null; toast(names.length > 1 ? '開了 ' + names.length + ' 團：' + names.join('、') : '開團了：' + names[0]); await refresh();
+      location.hash = ids.length === 1 && ids[0] ? 'g-' + ids[0] : '';
+    } catch (err) { toast(err.message || '沒有成功，再試一次'); await refresh(); repaintOpen(); }
   },
   'grp-op': async el => {
     const op = el.dataset.op, map = { close: ['closeGroup', {}], extend: ['extendGroup', { minutes: 15 }], reopen: ['extendGroup', { minutes: 30 }] }[op];
@@ -1617,6 +1690,15 @@ document.addEventListener('input', e => {
   const t = e.target, f = t.dataset && t.dataset.f; if (!f) return;
   (t.closest('.money-in') || t).classList.remove('bad');
   if (f === 'price' || f === 'priceL' || f === 'add' || f === 'dn') { const v = t.value.replace(/\D/g, '').slice(0, 5); if (v !== t.value) t.value = v; }
+  // 開團表單：只更新狀態，搜尋框打字時只重畫建議清單（不會跳掉鍵盤）
+  if (S.view === 'admin' && S.adminTab === 'open' && S.openForm && t.dataset.type) {
+    const type = t.dataset.type, F = S.openForm[type];
+    if (f === 'osq') { F.q = t.value; const el = $(`[data-sugg="${type}"]`); if (el) el.innerHTML = suggestHtml(type); }
+    else if (f === 'oh') F.h = +t.value;
+    else if (f === 'om') F.m = +t.value;
+    else if (f === 'onote') F.note = t.value;
+    return;
+  }
   let o = null;
   if (S.view === 'shop' && S.edit) {
     o = S.edit;
@@ -1637,7 +1719,11 @@ document.addEventListener('input', e => {
   }
   if (o && !o.dirty) { o.dirty = true; renderBar(); }
 });
-document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'mem-in') { e.preventDefault(); ADMIN_ACT['mem-add'](); } });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  if (e.target.id === 'mem-in') { e.preventDefault(); ADMIN_ACT['mem-add'](); }
+  if (e.target.dataset && e.target.dataset.f === 'osq') { e.preventDefault(); const b = $(`[data-sugg="${e.target.dataset.type}"] .sugg`); if (b) b.click(); }   // 按 Enter 選第一個
+});
 window.addEventListener('beforeunload', e => { if (isDirty()) { e.preventDefault(); e.returnValue = ''; } });
 
 /* ================= 互動 ================= */
