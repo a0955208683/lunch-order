@@ -19,10 +19,10 @@ const TZ = 'Asia/Taipei';
 const TAB = { shops: '店家', menu: '菜單', options: '選項', members: '成員', groups: '開團', orders: '訂單' };
 const HEAD = {
   shops:   ['店名', '類型', '電話', '備註', '停用'],
-  menu:    ['店名', '分類', '品名', '價格', '第二容量價', '說明', '容量名稱'],
+  menu:    ['店名', '分類', '品名', '價格', '第二容量價', '說明', '容量名稱', '優惠'],
   options: ['類型', '選項組', '選項', '加價', '複選', '必選'],
   members: ['姓名'],
-  groups:  ['團ID', '店名', '截止時間', '狀態', '備註', '建立時間', '已推播'],
+  groups:  ['團ID', '店名', '截止時間', '狀態', '備註', '建立時間', '已推播', '買一送一'],
   orders:  ['團ID', '姓名', '內容', '金額', '已付金額', '更新時間', '明細'],
 };
 const ST_OPEN = '進行中', ST_CLOSED = '已結單';
@@ -105,7 +105,13 @@ const ACTIONS = {
     const dl = +p.deadline;
     if (!(dl > Date.now())) throw err_('BADTIME', '截止時間已經過了');
     const id = Utilities.getUuid().replace(/-/g, '').slice(0, 8);
-    sheet_('groups').appendRow([id, shop, new Date(dl), ST_OPEN, String(p.note || '').slice(0, 80), new Date(), '']);
+    // 今日買一送一：只收這家店菜單裡有的品項
+    const items = readAll_().menu.filter(m => m.shop === shop).map(m => m.item), seen = {};
+    const promos = (Array.isArray(p.promos) ? p.promos : []).filter(x => x && items.indexOf(x.item) >= 0 && !seen[x.item] && (seen[x.item] = true))
+      .slice(0, 20).map(x => ({ item: String(x.item), only: !!x.only }));
+    const sh = sheet_('groups');
+    sh.getRange(1, 1, 1, HEAD.groups.length).setValues([HEAD.groups]).setFontWeight('bold').setBackground('#DDEFE3');
+    sh.appendRow([id, shop, new Date(dl), ST_OPEN, String(p.note || '').slice(0, 80), new Date(), '', promos.length ? JSON.stringify(promos) : '']);
     return { ok: true, id: id };
   },
 
@@ -156,7 +162,7 @@ const ACTIONS = {
 
     const key = orig || name;
     const menu = rows_('menu').filter(r => String(r[0]).trim() !== key && String(r[0]).trim());
-    items.forEach(it => menu.push([name, it.cat, it.item, it.price, it.priceL || '', it.desc, it.sizes]));
+    items.forEach(it => menu.push([name, it.cat, it.item, it.price, it.priceL || '', it.desc, it.sizes, it.disc]));
     writeRows_('menu', menu);
 
     if (orig && orig !== name) {         // 改店名：開過的團、專屬選項一起改，才對得上
@@ -226,7 +232,7 @@ function readAll_() {
   const groups = rows_('groups').filter(r => r[0]).map(r => ({
     id: String(r[0]), shop: String(r[1]).trim(), deadline: ms_(r[2]),
     status: String(r[3]).trim() === ST_CLOSED ? 'closed' : 'open',
-    note: String(r[4] || ''), createdAt: ms_(r[5]),
+    note: String(r[4] || ''), createdAt: ms_(r[5]), promos: json_(r[7], []),
   })).filter(g => g.deadline > cutoff);
   const ids = {}; groups.forEach(g => { ids[g.id] = true; });
   const orders = rows_('orders').filter(r => ids[String(r[0])]).map(r => {
@@ -238,7 +244,7 @@ function readAll_() {
     shops: readShops_(),
     menu: rows_('menu').filter(r => r[0] && r[2]).map(r => ({
       shop: String(r[0]).trim(), cat: String(r[1] || '其他').trim(), item: String(r[2]).trim(),
-      price: num_(r[3]), priceL: num_(r[4]), desc: String(r[5] || ''), sizes: String(r[6] || ''),
+      price: num_(r[3]), priceL: num_(r[4]), desc: String(r[5] || ''), sizes: String(r[6] || ''), disc: String(r[7] || ''),
     })),
     options: rows_('options').filter(r => r[0] && r[2]).map(r => ({
       type: String(r[0]).trim(), group: String(r[1] || '客製').trim(), label: String(r[2]).trim(),
@@ -275,8 +281,17 @@ function cleanItems_(items, type) {
     priceL: type === '飲料' ? Math.max(0, Math.round(num_(it.priceL))) : 0,
     desc: String(it.desc || '').trim().slice(0, 40),
     sizes: type === '飲料' && num_(it.priceL) ? sizes_(it.sizes) : '',
+    disc: disc_(it.disc),
   }));
 }
+// 分類優惠：「-5」= 每份減 5 元、「x90」= 打 9 折；其他一律當作沒有優惠
+function disc_(s) {
+  s = String(s || '').trim();
+  let m = s.match(/^-(\d{1,3})$/); if (m && +m[1] > 0) return '-' + (+m[1]);
+  m = s.match(/^x(\d{1,2})$/); if (m && +m[1] > 0 && +m[1] < 100) return 'x' + (+m[1]);
+  return '';
+}
+function json_(s, d) { try { return s ? JSON.parse(s) : d; } catch (_) { return d; } }
 // 兩種容量的名稱，例如「M/L」「L/瓶」
 function sizes_(s) {
   const p = String(s || '').split('/').map(x => x.trim().slice(0, 4)).filter(String);
@@ -358,9 +373,9 @@ function summarize_(g, d) {
   const items = {};
   os.forEach(o => o.lines.forEach(l => {
     const it = items[l.item] || (items[l.item] = { item: l.item, qty: 0, vars: {} });
-    it.qty += l.qty;
-    const vk = [l.size].concat(l.opts || []).filter(String).join(' ');
-    const v = it.vars[vk] || (it.vars[vk] = { label: vk, qty: 0, notes: [] });
+    it.qty += l.qty * (l.bogo ? 2 : 1);                 // 買一送一的一組是 2 杯
+    const vk = variant_(l);
+    const v = it.vars[vk] || (it.vars[vk] = { label: vk, qty: 0, bogo: !!l.bogo, notes: [] });
     v.qty += l.qty;
     if (l.note) v.notes.push(o.name + '：' + l.note);
   }));
@@ -393,7 +408,7 @@ function bubble_(g, d) {
   s.list.slice(0, 25).forEach(it => {
     const simple = it.vars.length === 1 && !it.vars[0].label;
     itemRows.push(row(it.item, '×' + it.qty, { l: { weight: 'bold' }, r: { weight: 'bold' } }));
-    if (!simple) it.vars.forEach(v => itemRows.push(row('　' + (v.label || '一般'), '×' + v.qty, { l: { color: muted, size: 'xs' }, r: { color: muted, size: 'xs' } })));
+    if (!simple) it.vars.forEach(v => itemRows.push(row('　' + (v.label || '一般'), '×' + v.qty + (v.bogo ? ' 組' : ''), { l: { color: muted, size: 'xs' }, r: { color: muted, size: 'xs' } })));
     it.vars.forEach(v => v.notes.forEach(n => itemRows.push(txt('　備註 ' + n, { size: 'xxs', color: muted }))));
   });
   const peopleRows = s.os.slice(0, 35).map(o => {
@@ -554,6 +569,7 @@ function groupRow_(id) {
 function cleanLines_(lines) {
   return (Array.isArray(lines) ? lines : []).filter(l => l && l.item && +l.qty > 0).slice(0, 30).map(l => ({
     item: String(l.item).slice(0, 40),
+    bogo: !!l.bogo,
     size: String(l.size || '').trim().slice(0, 6),
     opts: (Array.isArray(l.opts) ? l.opts : []).map(String).slice(0, 12),
     unit: Math.max(0, Math.round(+l.unit || 0)),
@@ -562,7 +578,8 @@ function cleanLines_(lines) {
   }));
 }
 function sumAmt_(lines) { return lines.reduce((s, l) => s + l.unit * l.qty, 0); }
+function variant_(l) { return [l.bogo ? '買一送一' : '', l.size].concat(l.opts || []).filter(String).join(' '); }
 function linesText_(lines) {
-  return lines.map(l => l.item + ([l.size].concat(l.opts).filter(String).length ? ' ' + [l.size].concat(l.opts).filter(String).join(' ') : '') +
-    ' ×' + l.qty + (l.note ? '（' + l.note + '）' : '')).join('；');
+  return lines.map(l => l.item + (variant_(l) ? ' ' + variant_(l) : '') +
+    ' ×' + l.qty + (l.bogo ? ' 組' : '') + (l.note ? '（' + l.note + '）' : '')).join('；');
 }

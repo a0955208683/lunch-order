@@ -357,6 +357,10 @@ textarea.field{height:auto;min-height:150px;padding:10px 12px;line-height:1.6;re
 .szrow{display:flex;align-items:center;gap:6px;padding:2px 0 10px 4px;font-size:13px;color:var(--muted)}
 .szrow .field{width:64px;height:36px;padding:0 8px;text-align:center;font-size:16px;color:var(--ink)}
 .money-in span{max-width:2.6em;overflow:hidden;white-space:nowrap}
+.szrow .dsel{width:100px;text-align:left;padding:0 10px}
+.bogo{display:inline-block;font-size:12px;font-weight:700;color:var(--on-yolk);background:var(--yolk);padding:0 7px;border-radius:6px;line-height:1.6;white-space:nowrap}
+.dtag{font-family:var(--f-body);font-size:12px;font-weight:700;color:var(--leaf);background:var(--leaf-soft);padding:1px 8px;border-radius:6px;margin-left:8px;vertical-align:2px}
+.notice.promo{background:var(--yolk-soft);border-color:transparent;font-weight:500}
 .chips.sm{margin:4px 0 2px}
 .chips.sm .chip{min-height:34px;font-size:13.5px;padding:0 12px}
 .chip.mem{padding-right:3px;gap:2px}
@@ -433,13 +437,34 @@ const I = {
 };
 
 /* ================= 訂單計算（前端、試用後端共用） ================= */
-const variantText = l => [l.size, ...(l.opts || [])].filter(Boolean).join(' ');
+const BOGO = '買一送一';
+const tagsOf = l => [l.bogo ? BOGO : '', l.size, ...(l.opts || [])].filter(Boolean);
+const variantText = l => tagsOf(l).join(' ');
 const lineKey = l => l.item + '|' + variantText(l) + '|' + (l.note || '');
 const sumAmt = lines => lines.reduce((s, l) => s + l.unit * l.qty, 0);
-const sumQty = lines => lines.reduce((s, l) => s + l.qty, 0);
+const cupsOf = l => l.qty * (l.bogo ? 2 : 1);          // 買一送一的一組是 2 杯
+const sumQty = lines => lines.reduce((s, l) => s + cupsOf(l), 0);
+const qtyText = l => '×' + l.qty + (l.bogo ? ' 組' : '');
+// 分類優惠：「-5」= 每份減 5 元，「x90」= 打 9 折（四捨五入）
+function parseDisc(s) {
+  s = String(s || '').trim();
+  let m = s.match(/^-(\d{1,3})$/); if (m && +m[1] > 0) return { kind: 'minus', n: +m[1] };
+  m = s.match(/^x(\d{1,2})$/); if (m && +m[1] > 0 && +m[1] < 100) return { kind: 'pct', n: +m[1] };
+  return null;
+}
+const cleanDisc = s => { const d = parseDisc(s); return d ? (d.kind === 'minus' ? '-' : 'x') + d.n : ''; };
+const discText = d => !d ? '' : d.kind === 'minus' ? '每份減 ' + d.n + ' 元' : (d.n % 10 ? d.n : d.n / 10) + ' 折';
+const applyDisc = (p, d) => !d || !p ? p : d.kind === 'minus' ? Math.max(0, p - d.n) : Math.round(p * d.n / 100);
+const promoOf = (g, item) => (g.promos || []).find(p => p.item === item);
+function cleanPromos(list, items) {
+  const seen = new Set();
+  return (Array.isArray(list) ? list : []).filter(p => p && items.includes(p.item) && !seen.has(p.item) && seen.add(p.item))
+    .slice(0, 20).map(p => ({ item: String(p.item), only: !!p.only }));
+}
 function cleanLines(lines) {
   return (Array.isArray(lines) ? lines : []).filter(l => l && l.item && +l.qty > 0).slice(0, 30).map(l => ({
     item: String(l.item).slice(0, 40),
+    bogo: !!l.bogo,
     size: String(l.size || '').trim().slice(0, 6),
     opts: (l.opts || []).map(String).slice(0, 12),
     unit: Math.max(0, Math.round(+l.unit || 0)),
@@ -453,6 +478,7 @@ function cleanItems(items, type) {
     price: Math.max(0, Math.round(+it.price || 0)), priceL: type === '飲料' ? Math.max(0, Math.round(+it.priceL || 0)) : 0,
     desc: String(it.desc || '').trim().slice(0, 40),
     sizes: type === '飲料' && +it.priceL ? splitSizes(it.sizes).join('/') : '',
+    disc: cleanDisc(it.disc),
   }));
 }
 // 兩種容量的名稱，例如「M/L」「L/瓶」；沒設定或不合理就用 M/L
@@ -578,7 +604,8 @@ const Mock = (() => {
       need(p);
       if (!d.shops.find(s => s.name === p.shop && !s.disabled)) throw apiErr('NOSHOP', '找不到這家店，或這家店暫停使用中');
       if (+p.deadline <= now()) throw apiErr('BADTIME', '截止時間已經過了');
-      const g = { id: Math.random().toString(36).slice(2, 10), shop: p.shop, deadline: +p.deadline, status: 'open', note: String(p.note || '').slice(0, 80), createdAt: now() };
+      const promos = cleanPromos(p.promos, d.menu.filter(m => m.shop === p.shop).map(m => m.item));
+      const g = { id: Math.random().toString(36).slice(2, 10), shop: p.shop, deadline: +p.deadline, status: 'open', note: String(p.note || '').slice(0, 80), createdAt: now(), promos };
       d.groups.push(g); return { ok: true, id: g.id };
     },
     closeGroup(d, p) { need(p); grp(d, p.groupId).status = 'closed'; return { ok: true }; },
@@ -830,13 +857,14 @@ function gcard(g, past) {
   const due = os.reduce((s, o) => s + Math.max(0, o.total - (+o.paid || 0)), 0);
   const drink = shop.type === '飲料';
   const avs = os.slice(-5).map(o => avatar(o.name, 'sm')).join('');
-  const mineTxt = mine.length ? '你點了 ' + mine.map(l => l.item + (l.qty > 1 ? ' ×' + l.qty : '')).join('、') : (past ? '你沒有點' : '你還沒點');
+  const mineTxt = mine.length ? '你點了 ' + mine.map(l => l.item + (l.qty > 1 || l.bogo ? ' ' + qtyText(l) : '')).join('、') : (past ? '你沒有點' : '你還沒點');
+  const promoTxt = (g.promos || []).length && !past ? ' · ' + BOGO + '：' + g.promos.map(p => p.item).join('、') : '';
   return `<button class="gcard ${past ? 'past' : ''}" data-act="open-group" data-id="${esc(g.id)}">
     <div class="gc-main">
       <span class="glyph ${drink ? 'drink' : 'bento'}">${drink ? '飲' : '便'}</span>
       <span class="gc-body">
         <span class="gc-t"><b>${esc(g.shop)}</b>${cdHtml(g)}</span>
-        <span class="gc-m num">${fmtDate(g.deadline)} ${fmtTime(g.deadline)} 截止${g.note ? ' · ' + esc(g.note) : ''}</span>
+        <span class="gc-m num">${fmtDate(g.deadline)} ${fmtTime(g.deadline)} 截止${g.note ? ' · ' + esc(g.note) : ''}${esc(promoTxt)}</span>
         <span class="gc-p">${os.length ? `<span class="avs">${avs}</span>` : ''}<span class="num">${os.length} 人 · ${qty} 份 · ${money(total)}${past && due ? ' · 未收 ' + money(due) : ''}</span></span>
       </span>
     </div>
@@ -852,21 +880,25 @@ function menuHtml(g) {
   let h = '';
   if (!open) h += `<div class="notice closed">這一團已截止，訂單不能再修改。</div>`;
   const note = [g.note, shop.note].filter(Boolean).join(' · ');
+  if ((g.promos || []).length && open) h += `<div class="notice promo"><span class="bogo">${BOGO}</span><span>今天 ${esc(g.promos.map(p => p.item).join('、'))}</span></div>`;
   if (note && open) h += `<div class="notice"><span>${esc(note)}</span></div>`;
-  if (!items.length) h += `<div class="empty-st" style="margin-top:16px"><b>這家店還沒有菜單</b><p>到試算表的「菜單」頁新增品項。</p></div>`;
+  if (!items.length) h += `<div class="empty-st" style="margin-top:16px"><b>這家店還沒有菜單</b><p>到「管理 → 店家」新增品項。</p></div>`;
   cats.forEach((c, ci) => {
-    h += `<section class="sec" id="cat-${ci}"><h3>${esc(c)}</h3><div class="menu">`;
-    items.filter(m => (m.cat || '其他') === c).forEach(m => {
-      const myQty = mine.filter(l => l.item === m.item).reduce((s, l) => s + l.qty, 0);
-      const plainIdx = mine.findIndex(l => l.item === m.item && !l.size && !l.opts.length && !l.note);
+    const catItems = items.filter(m => (m.cat || '其他') === c), cd = parseDisc(catItems[0] && catItems[0].disc);
+    h += `<section class="sec" id="cat-${ci}"><h3>${esc(c)}${cd ? `<span class="dtag">${discText(cd)}</span>` : ''}</h3><div class="menu">`;
+    catItems.forEach(m => {
+      const myQty = mine.filter(l => l.item === m.item).reduce((s, l) => s + cupsOf(l), 0);
+      const pr = promoOf(g, m.item), d = parseDisc(m.disc);
+      const plainIdx = pr ? -1 : mine.findIndex(l => l.item === m.item && !l.size && !l.opts.length && !l.note && !l.bogo);
       const sz = sizesOf(m);
-      const price = m.priceL ? `<span class="price">${esc(sz[0])} ${money(m.price)}</span><span class="price">${esc(sz[1])} ${money(m.priceL)}</span>` : `<span class="price">${money(m.price)}</span>`;
+      const p1 = pr ? m.price : applyDisc(m.price, d), p2 = pr ? m.priceL : applyDisc(m.priceL, d), pre = pr ? '2 杯 ' : '';
+      const price = (pr ? `<span class="bogo">${BOGO}</span>` : '') + (m.priceL ? `<span class="price">${esc(sz[0])} ${pre}${money(p1)}</span><span class="price">${esc(sz[1])} ${pre}${money(p2)}</span>` : `<span class="price">${pre}${money(p1)}</span>`);
       let ctl;
       if (!open) ctl = myQty ? `<span class="cnt">×${myQty}</span>` : '';
       else if (!drink && plainIdx >= 0) {
         const extra = myQty - mine[plainIdx].qty;
         ctl = `${extra ? `<span class="cnt">+${extra}</span>` : ''}<span class="stepper"><button data-act="dec" data-idx="${plainIdx}" aria-label="少一份">${I.minus}</button><span class="n">${mine[plainIdx].qty}</span><button data-act="inc" data-idx="${plainIdx}" aria-label="多一份">${I.plus}</button></span>`;
-      } else ctl = `${myQty ? `<span class="cnt">×${myQty}</span>` : ''}<button class="add" data-act="${drink ? 'item' : 'quick'}" data-item="${esc(m.item)}" aria-label="加入 ${esc(m.item)}">${I.plus}</button>`;
+      } else ctl = `${myQty ? `<span class="cnt">×${myQty}</span>` : ''}<button class="add" data-act="${drink || pr ? 'item' : 'quick'}" data-item="${esc(m.item)}" aria-label="加入 ${esc(m.item)}">${I.plus}</button>`;
       h += `<div class="mrow ${myQty ? 'has' : ''}">
         <button class="mtap" data-act="item" data-item="${esc(m.item)}" ${open ? '' : 'disabled'}>
           <span class="mname">${esc(m.item)}</span>
@@ -893,8 +925,8 @@ function peopleHtml(g) {
     h += `<div class="pcard ${me ? 'me' : ''}">
       <div class="phead">${avatar(o.name)}<b>${esc(o.name)}</b>${me ? '<span class="metag">你</span>' : ''}${o.updatedAt ? `<small class="num">${fmtTime(o.updatedAt)}</small>` : ''}<span class="spacer"></span><span class="price">${money(o.total)}</span></div>
       <div class="plines">${o.lines.map((l, i) => `<div class="pline">
-        <div class="pl-main"><div class="pl-name">${esc(l.item)}${l.qty > 1 ? ` <span class="muted num">×${l.qty}</span>` : ''}</div>
-          ${variantText(l) ? `<div class="tags">${[l.size, ...l.opts].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
+        <div class="pl-main"><div class="pl-name">${esc(l.item)}${l.qty > 1 || l.bogo ? ` <span class="muted num">${qtyText(l)}</span>` : ''}</div>
+          ${variantText(l) ? `<div class="tags">${tagsOf(l).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
           ${l.note ? `<div class="pl-note">備註：${esc(l.note)}</div>` : ''}</div>
         ${!me && open ? `<button class="follow" data-act="follow" data-name="${esc(o.name)}" data-idx="${i}">${I.plusSm}跟點</button>` : ''}
       </div>`).join('')}</div>
@@ -909,10 +941,10 @@ function summarize(g) {
   os.forEach(o => o.lines.forEach(l => {
     let it = items.get(l.item);
     if (!it) { it = { item: l.item, qty: 0, vars: new Map() }; items.set(l.item, it); }
-    it.qty += l.qty;
+    it.qty += cupsOf(l);
     const vk = variantText(l);
     let v = it.vars.get(vk);
-    if (!v) { v = { label: vk, qty: 0, notes: [] }; it.vars.set(vk, v); }
+    if (!v) { v = { label: vk, qty: 0, bogo: !!l.bogo, notes: [] }; it.vars.set(vk, v); }
     v.qty += l.qty; if (l.note) v.notes.push(o.name + '：' + l.note);
   }));
   const idx = n => { const i = order.indexOf(n); return i < 0 ? 999 : i; };
@@ -924,7 +956,7 @@ function summarize(g) {
 function storeText(g) {
   const s = summarize(g), out = [`【${g.shop}】${fmtDate(g.deadline)} 共 ${s.qty} 份 ${money(s.total)}`];
   s.list.forEach(it => it.vars.forEach(v => {
-    out.push(`${it.item}${v.label ? ' ' + v.label : ''} ×${v.qty}`);
+    out.push(`${it.item}${v.label ? ' ' + v.label : ''} ×${v.qty}${v.bogo ? ` 組（${v.qty * 2} 杯）` : ''}`);
     v.notes.forEach(n => out.push('　備註 ' + n));
   }));
   return out.join('\n');
@@ -947,7 +979,7 @@ function statsHtml(g) {
       ${s.list.map(it => {
         const simple = it.vars.length === 1 && !it.vars[0].label && !it.vars[0].notes.length;
         return `<div class="srow"><span class="nm">${esc(it.item)}</span><span class="q">×${it.qty}</span></div>` + (simple ? '' :
-          `<div class="svars">${it.vars.map(v => `<div class="svar">${v.label ? `<span class="tags">${v.label.split(' ').map(t => `<span class="tag">${esc(t)}</span>`).join('')}</span>` : '<span class="muted">一般</span>'}<span class="q">×${v.qty}</span></div>${v.notes.map(n => `<div class="snote">備註 ${esc(n)}</div>`).join('')}`).join('')}</div>`);
+          `<div class="svars">${it.vars.map(v => `<div class="svar">${v.label ? `<span class="tags">${v.label.split(' ').map(t => `<span class="tag">${esc(t)}</span>`).join('')}</span>` : '<span class="muted">一般</span>'}<span class="q">×${v.qty}${v.bogo ? ' 組' : ''}</span></div>${v.notes.map(n => `<div class="snote">備註 ${esc(n)}</div>`).join('')}`).join('')}</div>`);
       }).join('')}
     </div>
     <div class="block">
@@ -1054,18 +1086,26 @@ function openItem(gid, itemName, editIdx) {
   if (!S.me) return askName(() => openItem(gid, itemName, editIdx));
   const shop = shopOf(g), m = menuOf(g.shop).find(x => x.item === itemName); if (!m) return;
   const drink = shop.type === '飲料', groups = optionsFor(shop);
-  const sz = sizesOf(m);
+  const sz = sizesOf(m), disc = parseDisc(m.disc), pr = promoOf(g, m.item);
   const base = editIdx != null ? myLines(gid)[editIdx] : null;
   const st = { size: m.priceL ? (base && sz.includes(base.size) ? base.size : sz[0]) : '', qty: base ? base.qty : 1, sel: {} };
+  // 買一送一：一組 2 杯同款、付原價；「只能點買一送一」時不能單杯
+  st.bogo = !!pr && (pr.only || (base ? !!base.bogo : true));
   groups.forEach(gr => { st.sel[gr.name] = new Set(); });
   if (base) base.opts.forEach(o => { const gr = groups.find(x => x.items.some(i => i.label === o)); if (gr) st.sel[gr.name].add(o); });
-  const unit = () => (m.priceL && st.size === sz[1] ? m.priceL : m.price) + groups.reduce((s, gr) => s + gr.items.reduce((t, i) => t + (st.sel[gr.name].has(i.label) ? i.add : 0), 0), 0);
+  const raw = s => (m.priceL && s === sz[1] ? m.priceL : m.price);
+  const cupPrice = s => st.bogo ? raw(s) : applyDisc(raw(s), disc);
+  const unit = () => cupPrice(st.size) + groups.reduce((s, gr) => s + gr.items.reduce((t, i) => t + (st.sel[gr.name].has(i.label) ? i.add : 0), 0), 0);
   const opts = () => groups.flatMap(gr => gr.items.filter(i => st.sel[gr.name].has(i.label)).map(i => i.label));
+  const p1 = applyDisc(m.price, disc), p2 = applyDisc(m.priceL, disc);
   const html = `
     <h2 class="sh-h">${esc(m.item)}</h2>
-    <div class="sh-sub">${m.desc ? esc(m.desc) + ' · ' : ''}${m.priceL ? `${esc(sz[0])} ${money(m.price)} / ${esc(sz[1])} ${money(m.priceL)}` : money(m.price)}</div>
+    <div class="sh-sub">${m.desc ? esc(m.desc) + ' · ' : ''}${m.priceL ? `${esc(sz[0])} ${money(p1)} / ${esc(sz[1])} ${money(p2)}` : money(p1)}${disc ? ' · 已' + discText(disc) : ''}</div>
+    ${pr ? `<div class="ogrp" data-g="__plan"><div class="ogrp-h"><span>今日${BOGO}</span><span class="req must">${pr.only ? '只能點' + BOGO : '必選'}</span></div><div class="chips">
+      <button class="chip" data-plan="1">${BOGO}（2 杯）</button>${pr.only ? '' : `<button class="chip" data-plan="0">單杯</button>`}</div>
+      <div class="hint">一組是 2 杯同容量、同甜度冰塊，付原價。兩杯想要不同口味就點兩組，或跟同事合點。</div></div>` : ''}
     ${m.priceL ? `<div class="ogrp" data-g="__size"><div class="ogrp-h"><span>容量</span><span class="req must">必選</span></div><div class="chips">
-      <button class="chip" data-size="${esc(sz[0])}">${esc(sz[0])} <small>${money(m.price)}</small></button><button class="chip" data-size="${esc(sz[1])}">${esc(sz[1])} <small>${money(m.priceL)}</small></button></div></div>` : ''}
+      <button class="chip" data-size="${esc(sz[0])}">${esc(sz[0])} <small data-szp="${esc(sz[0])}"></small></button><button class="chip" data-size="${esc(sz[1])}">${esc(sz[1])} <small data-szp="${esc(sz[1])}"></small></button></div></div>` : ''}
     ${groups.map(gr => `<div class="ogrp" data-g="${esc(gr.name)}"><div class="ogrp-h"><span>${esc(gr.name)}</span><span class="req ${gr.required ? 'must' : ''}">${gr.required ? '必選' : gr.multi ? '可複選' : '選填'}</span></div>
       <div class="chips">${gr.items.map(i => `<button class="chip" data-opt="${esc(i.label)}">${esc(i.label)}${i.add ? ` <small>+${i.add}</small>` : ''}</button>`).join('')}</div></div>`).join('')}
     <div class="ogrp"><div class="ogrp-h"><label for="it-note">備註</label><span class="req">選填</span></div>
@@ -1079,20 +1119,24 @@ function openItem(gid, itemName, editIdx) {
     mount(root) {
       const paint = () => {
         $$('[data-size]', root).forEach(c => c.classList.toggle('on', c.dataset.size === st.size));
+        $$('[data-szp]', root).forEach(c => { c.textContent = (st.bogo ? '2 杯 ' : '') + money(cupPrice(c.dataset.szp)); });
+        $$('[data-plan]', root).forEach(c => c.classList.toggle('on', (c.dataset.plan === '1') === st.bogo));
         $$('.ogrp[data-g]', root).forEach(gEl => { const set = st.sel[gEl.dataset.g]; if (set) $$('[data-opt]', gEl).forEach(c => c.classList.toggle('on', set.has(c.dataset.opt))); });
-        $('#it-q', root).textContent = st.qty;
-        $('#it-add', root).textContent = (base ? '更新 · ' : '加入 · ') + money(unit() * st.qty);
+        $('#it-q', root).textContent = st.bogo ? st.qty + ' 組' : st.qty;
+        $('#it-add', root).textContent = (base ? '更新 · ' : '加入 · ') + (st.bogo ? st.qty * 2 + ' 杯 ' : '') + money(unit() * st.qty);
         if (drink) {
-          $('#tl-item', root).textContent = m.item + (st.size ? ' ' + st.size : '');
+          $('#tl-item', root).textContent = m.item + (st.size ? ' ' + st.size : '') + (st.bogo ? ' ×2' : '');
           const o = opts(), el = $('#tl-opts', root);
           el.textContent = o.length ? o.join(' / ') : '還沒選甜度、冰塊'; el.classList.toggle('ph', !o.length);
-          $('#tl-price', root).textContent = money(unit()) + (st.qty > 1 ? ' ×' + st.qty : '');
+          $('#tl-price', root).textContent = (st.bogo ? BOGO + ' ' : '') + money(unit()) + (st.qty > 1 ? ' ×' + st.qty : '');
         }
       };
       paint();
       root.addEventListener('click', e => {
         const sz = e.target.closest('[data-size]');
         if (sz) { st.size = sz.dataset.size; return paint(); }
+        const pl = e.target.closest('[data-plan]');
+        if (pl) { st.bogo = pl.dataset.plan === '1'; return paint(); }
         const op = e.target.closest('[data-opt]');
         if (op) {
           const gr = groups.find(x => x.name === op.closest('.ogrp').dataset.g), set = st.sel[gr.name], v = op.dataset.opt;
@@ -1110,7 +1154,7 @@ function openItem(gid, itemName, editIdx) {
             $(`.ogrp[data-g="${CSS.escape(miss[0].name)}"]`, root).scrollIntoView({ block: 'center', behavior: 'smooth' });
             return toast('還沒選' + miss.map(x => x.name).join('、'));
           }
-          const line = { item: m.item, size: m.priceL ? st.size : '', opts: opts(), unit: unit(), qty: st.qty, note: $('#it-note', root).value.trim() };
+          const line = { item: m.item, bogo: st.bogo, size: m.priceL ? st.size : '', opts: opts(), unit: unit(), qty: st.qty, note: $('#it-note', root).value.trim() };
           const lines = myLines(gid);
           if (base) lines.splice(editIdx, 1);
           const same = lines.find(l => lineKey(l) === lineKey(line));
@@ -1134,10 +1178,10 @@ function openCart(keepScroll) {
     <div class="sh-sub">${esc(g.shop)} · <span class="num">${fmtTime(g.deadline)}</span> 截止${ps && ps.k !== 'unpaid' ? ' · ' + ps.t : ''}</div>
     <div class="clist">${lines.map((l, i) => `<div class="cline">
       <div class="cl-main"><div class="cl-name">${esc(l.item)}</div>
-        ${variantText(l) ? `<div class="tags">${[l.size, ...l.opts].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
+        ${variantText(l) ? `<div class="tags">${tagsOf(l).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
         ${l.note ? `<div class="pl-note">備註：${esc(l.note)}</div>` : ''}
-        <div class="cl-price num">${money(l.unit)} × ${l.qty} = <b>${money(l.unit * l.qty)}</b></div></div>
-      ${open ? `<div class="cl-ctl"><span class="stepper"><button data-act="dec" data-idx="${i}" aria-label="少一份">${I.minus}</button><span class="n">${l.qty}</span><button data-act="inc" data-idx="${i}" aria-label="多一份">${I.plus}</button></span><button class="txtbtn" data-act="edit-line" data-idx="${i}">修改選項</button></div>` : `<span class="cnt">×${l.qty}</span>`}
+        <div class="cl-price num">${money(l.unit)} × ${l.qty}${l.bogo ? ' 組（' + l.qty * 2 + ' 杯）' : ''} = <b>${money(l.unit * l.qty)}</b></div></div>
+      ${open ? `<div class="cl-ctl"><span class="stepper"><button data-act="dec" data-idx="${i}" aria-label="少一份">${I.minus}</button><span class="n">${l.qty}</span><button data-act="inc" data-idx="${i}" aria-label="多一份">${I.plus}</button></span><button class="txtbtn" data-act="edit-line" data-idx="${i}">修改選項</button></div>` : `<span class="cnt">${qtyText(l)}</span>`}
     </div>`).join('')}</div>
     <div class="sheet-foot"><div class="tot"><small>合計</small><b class="num">${money(sumAmt(lines))}</b><small>${stTxt}</small></div><span class="spacer"></span><button class="btn auto" data-act="sheet-close">好了</button></div>`, { keepScroll });
 }
@@ -1145,6 +1189,15 @@ function openCart(keepScroll) {
 /* ================= 管理後台 ================= */
 const ATABS = [['open', '開團'], ['groups', '團況'], ['shops', '店家'], ['options', '選項'], ['members', '成員']];
 const blankItem = () => ({ item: '', price: '', priceL: '', desc: '' });
+const blankDisc = () => ({ kind: '', n: '' });
+// 編輯畫面的優惠 → 存檔格式（「-5」或「x90」）；不合理回傳 null
+function discCode(d) {
+  if (!d.kind) return '';
+  const n = +d.n; if (!d.n || !n) return null;
+  if (d.kind === 'minus') return n > 0 && n < 1000 ? '-' + n : null;
+  const pct = n < 10 ? n * 10 : n;                        // 「9」= 9 折、「85」= 85 折
+  return pct > 0 && pct < 100 ? 'x' + pct : null;
+}
 function isDirty() {
   if (S.view === 'shop') return !!(S.edit && S.edit.dirty);
   if (S.view === 'admin') return !!((S.adminTab === 'options' && S.opt && S.opt.dirty) || (S.adminTab === 'members' && S.mem && S.mem.dirty));
@@ -1188,9 +1241,10 @@ function aOpenHtml() {
   const shops = S.data.shops.filter(s => !s.disabled);
   if (!shops.length) return `<div class="empty-st" style="margin-top:14px"><b>還沒有可以開團的店家</b><p>先到「店家」新增一家。</p><button class="btn ghost" data-act="atab" data-tab="shops">去新增店家</button></div>`;
   const d = new Date(now() + 60 * 60e3); d.setMinutes(d.getMinutes() < 30 ? 30 : 60, 0, 0);
+  if (!S.openForm || !shops.some(s => s.name === S.openForm.shop)) S.openForm = { shop: shops[0].name, promos: [] };
   return `<div class="panel">
     <label class="lbl" style="margin-top:0">店家</label>
-    <div class="chips" id="ad-shops">${shops.map((s, i) => `<button class="chip ${i ? '' : 'on'}" data-act="pick" data-shop="${esc(s.name)}">${esc(s.name)} <small>${esc(s.type)}</small></button>`).join('')}</div>
+    <div class="chips" id="ad-shops">${shops.map(s => `<button class="chip ${s.name === S.openForm.shop ? 'on' : ''}" data-act="pick" data-shop="${esc(s.name)}">${esc(s.name)} <small>${esc(s.type)}</small></button>`).join('')}</div>
     <label class="lbl" for="ad-h">今天幾點截止</label>
     <div class="tpick">
       <select class="field num" id="ad-h" aria-label="時">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === d.getHours() ? 'selected' : ''}>${pad(h)} 點</option>`).join('')}</select>
@@ -1198,15 +1252,32 @@ function aOpenHtml() {
       <select class="field num" id="ad-m" aria-label="分">${Array.from({ length: 12 }, (_, i) => i * 5).map(m => `<option value="${m}" ${m === d.getMinutes() ? 'selected' : ''}>${pad(m)} 分</option>`).join('')}</select>
     </div>
     <label class="lbl" for="ad-note">給大家的話</label><input class="field" id="ad-note" maxlength="80" placeholder="選填，例如：今天老闆加送滷蛋">
+    <div id="ad-promo">${promoFormHtml()}</div>
     <button class="btn" style="margin-top:20px;width:100%" data-act="do-open">開團</button>
   </div>`;
 }
+// 開團時的「今日買一送一」：只對這一團有效
+function promoFormHtml() {
+  const F = S.openForm, items = menuOf(F.shop), picked = new Set(F.promos.map(p => p.item));
+  const cats = [...new Set(items.map(m => m.cat || '其他'))];
+  const left = items.filter(m => !picked.has(m.item));
+  return `<label class="lbl" for="ad-pitem">今日${BOGO} <span class="muted" style="font-weight:400">選填</span></label>
+    ${left.length ? `<div class="tpick"><select class="field" id="ad-pitem"><option value="">選品項…</option>${cats.map(c => {
+      const opts = left.filter(m => (m.cat || '其他') === c);
+      return opts.length ? `<optgroup label="${esc(c)}">${opts.map(m => `<option value="${esc(m.item)}">${esc(m.item)}</option>`).join('')}</optgroup>` : '';
+    }).join('')}</select><button class="btn auto ghost" data-act="promo-add">加入</button></div>` : ''}
+    ${F.promos.map((p, i) => `<div class="arow"><div class="t"><b>${esc(p.item)}</b><small>${p.only ? '只能點' + BOGO + '，不能單杯' : '可以選' + BOGO + '或單杯'}</small></div>
+      <span class="muted" style="font-size:12.5px">只能${BOGO}</span><button class="tog ${p.only ? 'on' : ''}" data-act="promo-only" data-i="${i}" aria-label="只能點${BOGO}"></button>
+      <button class="mini del" data-act="promo-del" data-i="${i}" aria-label="移除">${I.x}</button></div>`).join('')}
+    <div class="hint">${BOGO}：一組 2 杯同款同容量，付原價（不打折）。</div>`;
+}
+const repaintPromo = () => { const el = $('#ad-promo'); if (el) el.innerHTML = promoFormHtml(); };
 
 function aGroupsHtml() {
   const gs = S.data.groups.slice().sort((a, b) => b.deadline - a.deadline);
   if (!gs.length) return `<div class="empty-st" style="margin-top:14px"><b>最近 3 天沒有開過團</b><p>到「開團」開一團吧。</p></div>`;
   return `<div class="panel" style="padding-block:4px">${gs.map(g => `<div class="arow">
-    <div class="t"><b>${esc(g.shop)}</b><small class="num">${fmtDate(g.deadline)} ${fmtTime(g.deadline)} 截止 · ${isOpen(g) ? '進行中' : '已截止'} · ${ordersOf(g.id).length} 人</small></div>
+    <div class="t"><b>${esc(g.shop)}</b><small class="num">${fmtDate(g.deadline)} ${fmtTime(g.deadline)} 截止 · ${isOpen(g) ? '進行中' : '已截止'} · ${ordersOf(g.id).length} 人${(g.promos || []).length ? ' · ' + BOGO + '：' + esc(g.promos.map(p => p.item).join('、')) : ''}</small></div>
     ${isOpen(g) ? `<button class="sbtn" data-act="grp-op" data-op="extend" data-id="${esc(g.id)}">延 15 分</button><button class="sbtn" data-act="grp-op" data-op="close" data-id="${esc(g.id)}">結單</button>`
       : `<button class="sbtn" data-act="grp-op" data-op="reopen" data-id="${esc(g.id)}">重開 30 分</button>`}
     <button class="mini del" data-act="grp-del" data-id="${esc(g.id)}" aria-label="刪除這一團">${I.x}</button></div>`).join('')}</div>
@@ -1229,11 +1300,15 @@ function startEdit(name) {
   const cats = [];
   if (s) menuOf(name).forEach(m => {
     let c = cats.find(x => x.name === m.cat);
-    if (!c) { c = { name: m.cat, sizes: ['M', 'L'], items: [] }; cats.push(c); }
+    if (!c) {
+      const d = parseDisc(m.disc);
+      c = { name: m.cat, sizes: ['M', 'L'], disc: d ? { kind: d.kind, n: String(d.kind === 'pct' && d.n % 10 === 0 ? d.n / 10 : d.n) } : blankDisc(), items: [] };
+      cats.push(c);
+    }
     if (m.priceL) c.sizes = sizesOf(m);
     c.items.push({ item: m.item, price: String(m.price), priceL: m.priceL ? String(m.priceL) : '', desc: m.desc || '' });
   });
-  if (!cats.length) cats.push({ name: '主餐', sizes: ['M', 'L'], items: [blankItem()] });
+  if (!cats.length) cats.push({ name: '主餐', sizes: ['M', 'L'], disc: blankDisc(), items: [blankItem()] });
   S.edit = { orig: s ? s.name : null, shop: { name: s ? s.name : '', type: s ? s.type : '便當', phone: s ? s.phone || '' : '', note: s ? s.note || '' : '', disabled: !!(s && s.disabled) }, cats, dirty: false, saving: false };
   location.hash = 'shop';
 }
@@ -1256,6 +1331,8 @@ function shopEditHtml() {
     <div class="ecat-h"><input class="field" data-f="cat" data-ci="${ci}" maxlength="20" value="${esc(c.name)}" placeholder="分類名稱，例如：主餐" aria-label="分類名稱">
       <button class="mini" data-act="ec-up" data-ci="${ci}" ${ci ? '' : 'disabled'} aria-label="分類上移">${I.up}</button><button class="mini" data-act="ec-down" data-ci="${ci}" ${ci < E.cats.length - 1 ? '' : 'disabled'} aria-label="分類下移">${I.down}</button><button class="mini del" data-act="ec-del" data-ci="${ci}" aria-label="刪除分類">${I.x}</button></div>
     ${drink ? `<div class="szrow"><span>容量名稱</span><input class="field" data-f="sz0" data-ci="${ci}" maxlength="4" value="${esc(c.sizes[0])}" aria-label="第一種容量"><span>/</span><input class="field" data-f="sz1" data-ci="${ci}" maxlength="4" value="${esc(c.sizes[1])}" aria-label="第二種容量"></div>` : ''}
+    <div class="szrow"><span>優惠</span><select class="field dsel" data-f="dkind" data-ci="${ci}" aria-label="優惠方式"><option value="" ${c.disc.kind ? '' : 'selected'}>無</option><option value="minus" ${c.disc.kind === 'minus' ? 'selected' : ''}>每份減</option><option value="pct" ${c.disc.kind === 'pct' ? 'selected' : ''}>打折</option></select>
+      ${c.disc.kind ? `<input class="field" data-f="dn" data-ci="${ci}" inputmode="numeric" maxlength="3" value="${esc(c.disc.n)}" placeholder="${c.disc.kind === 'pct' ? '9' : '5'}" aria-label="優惠數字"><span>${c.disc.kind === 'pct' ? '折' : '元'}</span>` : ''}</div>
     ${c.items.map((it, ii) => `<div class="erow" data-ci="${ci}" data-ii="${ii}">
       <div class="erow-1"><input class="field" data-f="item" maxlength="40" value="${esc(it.item)}" placeholder="品名" aria-label="品名">
         <label class="money-in"><span class="lab0">${drink ? esc(c.sizes[0]) : '$'}</span><input data-f="price" inputmode="numeric" value="${esc(it.price)}" placeholder="價格" aria-label="價格"></label>
@@ -1285,6 +1362,8 @@ async function saveShop() {
       if (!s0 || !s1) return markBad(`[data-f="${s0 ? 'sz1' : 'sz0'}"][data-ci="${ci}"]`, '「' + (c.name || '這個分類') + '」的容量名稱沒填');
       if (s0 === s1) return markBad(`[data-f="sz1"][data-ci="${ci}"]`, '兩種容量的名稱不能一樣');
     }
+    const disc = discCode(c.disc);
+    if (disc === null) return markBad(`[data-f="dn"][data-ci="${ci}"]`, '「' + (c.name || '這個分類') + '」的優惠數字不對');
     for (let ii = 0; ii < c.items.length; ii++) {
       const it = c.items[ii], nm = it.item.trim(), row = `.erow[data-ci="${ci}"][data-ii="${ii}"]`;
       if (!nm && !it.price && !it.desc.trim()) continue;
@@ -1292,7 +1371,7 @@ async function saveShop() {
       if (it.price === '') return markBad(row + ' [data-f="price"]', '「' + nm + '」沒填價格');
       if (seen.has(nm)) return markBad(row + ' [data-f="item"]', '「' + nm + '」重複了');
       seen.add(nm);
-      items.push({ cat: c.name.trim() || '其他', item: nm, price: +it.price, priceL: +it.priceL || 0, desc: it.desc.trim(), sizes: s0 + '/' + s1 });
+      items.push({ cat: c.name.trim() || '其他', item: nm, price: +it.price, priceL: +it.priceL || 0, desc: it.desc.trim(), sizes: s0 + '/' + s1, disc });
     }
   }
   if (!items.length) return toast('菜單至少要有一個品項');
@@ -1341,7 +1420,7 @@ function openImport() {
         E.cats = E.cats.filter(c => c.items.length);
         items.forEach(it => {
           let c = E.cats.find(x => x.name.trim() === it.cat);
-          if (!c) { c = { name: it.cat, sizes: ['M', 'L'], items: [] }; E.cats.push(c); }
+          if (!c) { c = { name: it.cat, sizes: ['M', 'L'], disc: blankDisc(), items: [] }; E.cats.push(c); }
           if (it.sizes) c.sizes = it.sizes.slice();
           c.items.push({ item: it.item, price: String(it.price), priceL: it.priceL ? String(it.priceL) : '', desc: it.desc });
         });
@@ -1429,15 +1508,24 @@ const ADMIN_ACT = {
     if (isDirty() && !(await askDiscard())) return;
     clearDirty(); S.adminTab = k; render(); window.scrollTo(0, 0);
   },
-  pick: el => $$('.chip', el.parentElement).forEach(c => c.classList.toggle('on', c === el)),
+  pick: el => {
+    $$('.chip', el.parentElement).forEach(c => c.classList.toggle('on', c === el));
+    if (el.dataset.shop && el.dataset.shop !== S.openForm.shop) { S.openForm = { shop: el.dataset.shop, promos: [] }; repaintPromo(); }
+  },
+  'promo-add': () => {
+    const v = $('#ad-pitem').value; if (!v) return toast('先選一個品項');
+    S.openForm.promos.push({ item: v, only: true }); repaintPromo();
+  },
+  'promo-only': el => { const p = S.openForm.promos[+el.dataset.i]; p.only = !p.only; repaintPromo(); },
+  'promo-del': el => { S.openForm.promos.splice(+el.dataset.i, 1); repaintPromo(); },
   'do-open': async el => {
-    const shop = $('#ad-shops .on').dataset.shop;
+    const shop = S.openForm.shop;
     const d = new Date(); d.setHours(+$('#ad-h').value, +$('#ad-m').value, 0, 0);
     if (d.getTime() <= now()) return toast('這個時間已經過了，請選晚一點');
     el.disabled = true;
     try {
-      const r = await api('openGroup', { pin: PIN, shop, deadline: d.getTime(), note: $('#ad-note').value.trim() });
-      toast('開團了：' + shop); await refresh();
+      const r = await api('openGroup', { pin: PIN, shop, deadline: d.getTime(), note: $('#ad-note').value.trim(), promos: S.openForm.promos });
+      S.openForm = null; toast('開團了：' + shop); await refresh();
       location.hash = r.id ? 'g-' + r.id : '';
     } catch (err) { toast(err.message || '沒有成功，再試一次'); el.disabled = false; }
   },
@@ -1468,7 +1556,7 @@ const ADMIN_ACT = {
     if (n && !(await confirmSheet('刪除分類', '「' + (c.name || '未命名') + '」裡的 ' + n + ' 個品項會一起刪除（按儲存後才生效）。', '刪除', true))) return;
     edChange(() => S.edit.cats.splice(+el.dataset.ci, 1));
   },
-  'ec-add': () => { edChange(() => S.edit.cats.push({ name: '', sizes: ['M', 'L'], items: [blankItem()] })); focusLater(`[data-f="cat"][data-ci="${S.edit.cats.length - 1}"]`); },
+  'ec-add': () => { edChange(() => S.edit.cats.push({ name: '', sizes: ['M', 'L'], disc: blankDisc(), items: [blankItem()] })); focusLater(`[data-f="cat"][data-ci="${S.edit.cats.length - 1}"]`); },
   'ei-add': el => {
     const ci = +el.dataset.ci; edChange(() => S.edit.cats[ci].items.push(blankItem()));
     focusLater(`.erow[data-ci="${ci}"][data-ii="${S.edit.cats[ci].items.length - 1}"] [data-f="item"]`);
@@ -1528,12 +1616,14 @@ const ADMIN_ACT = {
 document.addEventListener('input', e => {
   const t = e.target, f = t.dataset && t.dataset.f; if (!f) return;
   (t.closest('.money-in') || t).classList.remove('bad');
-  if (f === 'price' || f === 'priceL' || f === 'add') { const v = t.value.replace(/\D/g, '').slice(0, 5); if (v !== t.value) t.value = v; }
+  if (f === 'price' || f === 'priceL' || f === 'add' || f === 'dn') { const v = t.value.replace(/\D/g, '').slice(0, 5); if (v !== t.value) t.value = v; }
   let o = null;
   if (S.view === 'shop' && S.edit) {
     o = S.edit;
     if (f === 'name' || f === 'phone' || f === 'note') o.shop[f] = t.value;
     else if (f === 'cat') o.cats[+t.dataset.ci].name = t.value;
+    else if (f === 'dkind') { o.cats[+t.dataset.ci].disc = { kind: t.value, n: '' }; o.dirty = true; renderMain(); renderBar(); return; }
+    else if (f === 'dn') o.cats[+t.dataset.ci].disc.n = t.value.replace(/\D/g, '').slice(0, 3);
     else if (f === 'sz0' || f === 'sz1') {
       const ci = +t.dataset.ci, k = f === 'sz0' ? 0 : 1;
       o.cats[ci].sizes[k] = t.value.replace(/\//g, '');
@@ -1572,8 +1662,8 @@ const ACT = {
   quick: el => {
     if (!S.me) return askName(() => ACT.quick(el));
     const g = curGroup(), m = g && menuOf(g.shop).find(x => x.item === el.dataset.item); if (!m || !isOpen(g)) return;
-    const lines = myLines(g.id), same = lines.find(l => l.item === m.item && !l.size && !l.opts.length && !l.note);
-    if (same) same.qty++; else lines.push({ item: m.item, size: '', opts: [], unit: m.price, qty: 1, note: '' });
+    const lines = myLines(g.id), same = lines.find(l => l.item === m.item && !l.size && !l.opts.length && !l.note && !l.bogo);
+    if (same) same.qty++; else lines.push({ item: m.item, size: '', opts: [], unit: applyDisc(m.price, parseDisc(m.disc)), qty: 1, note: '' });
     setMine(g.id, lines); toast('已加入 ' + m.item);
     try { navigator.vibrate && navigator.vibrate(8); } catch (e) { }
   },
