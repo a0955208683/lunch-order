@@ -64,6 +64,7 @@
 }
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;touch-action:manipulation}
+[hidden]{display:none!important}
 /* iOS 輸入框字小於 16px 會自動放大畫面，所有輸入框都用 16px */
 input,textarea,select{font-size:16px}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.5;-webkit-tap-highlight-color:transparent;-webkit-font-smoothing:antialiased}
@@ -283,6 +284,11 @@ svg{display:block;flex:none}
 .ogrp-h{display:flex;justify-content:space-between;align-items:baseline;font-weight:700;font-size:14.5px;margin-bottom:8px}
 .req{font-size:12px;font-weight:500;color:var(--muted)}
 .req.must{color:var(--chili)}
+.prm + .prm{border-top:1px solid var(--line)}
+.prm .arow{border:0}
+.prm-sz{align-items:center;padding:0 0 10px}
+.prm-sz .muted{font-size:12.5px;margin-right:2px}
+.cup-h{font-family:var(--f-display);font-size:17px;margin-top:18px;padding-top:12px;border-top:1px dashed var(--line)}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{min-height:40px;padding:0 15px;border-radius:999px;border:1.5px solid var(--line);background:var(--surface);font-weight:500;font-size:14.5px;display:inline-flex;align-items:center;gap:5px;transition:background .12s,border-color .12s}
 .chip.on{border-color:var(--leaf);background:var(--leaf-soft);color:var(--leaf)}
@@ -301,6 +307,7 @@ textarea.field{height:auto;min-height:150px;padding:10px 12px;line-height:1.6;re
 .btn:active{transform:scale(.98)}
 .btn.ghost{background:var(--surface-2);color:var(--ink);border:1px solid var(--line)}
 .btn.warn{background:var(--chili);color:#fff}
+.btn.line{background:#06C755;color:#fff;text-decoration:none}
 .btn:disabled{opacity:.45}
 .btn.auto{flex:none}
 .shake{animation:shake .35s}
@@ -449,6 +456,7 @@ const I = {
   up: svg('<path d="M12 19V5M6 11l6-6 6 6"/>', 17),
   down: svg('<path d="M12 5v14M6 13l6 6 6-6"/>', 17),
   x: svg('<path d="M7 7l10 10M17 7L7 17"/>', 17),
+  share: svg('<path d="M4 13v6a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-6M12 3v12M7.5 7.5L12 3l4.5 4.5"/>', 18),
 };
 // 店家縮圖：珍奶、便當
 const ART = {
@@ -477,7 +485,10 @@ const ART = {
 
 /* ================= 訂單計算（前端、試用後端共用） ================= */
 const BOGO = '買一送一';
-const tagsOf = l => [l.bogo ? BOGO : '', l.size, ...(l.opts || [])].filter(Boolean);
+// 買一送一的兩杯可以選不同甜度冰塊：opts 是第 1 杯，opts2 是第 2 杯（空的 = 跟第 1 杯一樣）
+const cup2Of = l => (l.opts2 && l.opts2.length ? l.opts2 : l.opts || []);
+const cupsDiffer = l => !!l.bogo && cup2Of(l).join('、') !== (l.opts || []).join('、');
+const tagsOf = l => [l.bogo ? BOGO : '', l.size, ...(l.opts || []), ...(cupsDiffer(l) ? ['第2杯：' + cup2Of(l).join(' ')] : [])].filter(Boolean);
 const variantText = l => tagsOf(l).join(' ');
 const lineKey = l => l.item + '|' + variantText(l) + '|' + (l.note || '');
 const sumAmt = lines => lines.reduce((s, l) => s + l.unit * l.qty, 0);
@@ -498,7 +509,7 @@ const promoOf = (g, item) => (g.promos || []).find(p => p.item === item);
 function cleanPromos(list, items) {
   const seen = new Set();
   return (Array.isArray(list) ? list : []).filter(p => p && items.includes(p.item) && !seen.has(p.item) && seen.add(p.item))
-    .slice(0, 20).map(p => ({ item: String(p.item), only: !!p.only }));
+    .slice(0, 20).map(p => ({ item: String(p.item), only: !!p.only, size: String(p.size || '').trim().slice(0, 6) }));
 }
 function cleanLines(lines) {
   return (Array.isArray(lines) ? lines : []).filter(l => l && l.item && +l.qty > 0).slice(0, 30).map(l => ({
@@ -506,6 +517,7 @@ function cleanLines(lines) {
     bogo: !!l.bogo,
     size: String(l.size || '').trim().slice(0, 6),
     opts: (l.opts || []).map(String).slice(0, 12),
+    opts2: l.bogo ? (l.opts2 || []).map(String).slice(0, 12) : [],
     unit: Math.max(0, Math.round(+l.unit || 0)),
     qty: Math.min(50, Math.max(1, Math.round(+l.qty))),
     note: String(l.note || '').slice(0, 60),
@@ -732,7 +744,7 @@ const isOpen = g => g.status === 'open' && now() < g.deadline;
 const curGroup = () => S.data.groups.find(g => g.id === S.gid);
 const ordersOf = gid => S.data.orders.filter(o => o.groupId === gid && o.lines && o.lines.length);
 const myOrder = gid => S.data.orders.find(o => o.groupId === gid && o.name === S.me);
-const myLines = gid => { const o = myOrder(gid); return o ? o.lines.map(l => Object.assign({}, l, { opts: (l.opts || []).slice() })) : []; };
+const myLines = gid => { const o = myOrder(gid); return o ? o.lines.map(l => Object.assign({}, l, { opts: (l.opts || []).slice(), opts2: (l.opts2 || []).slice() })) : []; };
 // key = 店名（專屬選項）或 便當／飲料（共用選項）
 function groupOpts(key) {
   const out = [];
@@ -839,6 +851,7 @@ function renderTop() {
         <button class="iconbtn" data-act="back" aria-label="返回">${I.back}</button>
         <div class="gh"><div class="gh-t">${esc(g.shop)}</div><div class="gh-s"><span class="num">${fmtTime(g.deadline)} 截止</span>${cdHtml(g)}</div></div>
         <span class="spacer"></span>
+        ${isOpen(g) ? `<button class="iconbtn" data-act="share-invite" aria-label="分享這一團到 LINE">${I.share}</button>` : ''}
         ${shop.phone ? `<a class="iconbtn" href="tel:${esc(shop.phone.replace(/[^\d+]/g, ''))}" aria-label="打給店家 ${esc(shop.phone)}">${I.phone}</a>` : ''}
       </div>
       <div class="seg" role="tablist">
@@ -930,8 +943,12 @@ function menuHtml(g) {
       const pr = promoOf(g, m.item), d = parseDisc(m.disc);
       const plainIdx = pr ? -1 : mine.findIndex(l => l.item === m.item && !l.size && !l.opts.length && !l.note && !l.bogo);
       const sz = sizesOf(m);
-      const p1 = pr ? m.price : applyDisc(m.price, d), p2 = pr ? m.priceL : applyDisc(m.priceL, d), pre = pr ? '2 杯 ' : '';
-      const price = (pr ? `<span class="bogo">${BOGO}</span>` : '') + (m.priceL ? `<span class="price">${esc(sz[0])} ${pre}${money(p1)}</span><span class="price">${esc(sz[1])} ${pre}${money(p2)}</span>` : `<span class="price">${pre}${money(p1)}</span>`);
+      const regular = m.priceL ? `<span class="price">${esc(sz[0])} ${money(applyDisc(m.price, d))}</span><span class="price">${esc(sz[1])} ${money(applyDisc(m.priceL, d))}</span>` : `<span class="price">${money(applyDisc(m.price, d))}</span>`;
+      let price = regular;
+      if (pr) {   // 買一送一：只顯示限定容量的「2 杯」原價；不是只能買一送一的話，平常價格也列出來
+        const bs = m.priceL ? (sz.includes(pr.size) ? [pr.size] : sz) : [''];
+        price = `<span class="bogo">${BOGO}</span>` + bs.map(s => `<span class="price">${esc(s)} 2 杯 ${money(m.priceL && s === sz[1] ? m.priceL : m.price)}</span>`).join('') + (pr.only ? '' : regular);
+      }
       let ctl;
       if (!open) ctl = myQty ? `<span class="cnt">×${myQty}</span>` : '';
       else if (!drink && plainIdx >= 0) {
@@ -979,12 +996,17 @@ function summarize(g) {
   const items = new Map();
   os.forEach(o => o.lines.forEach(l => {
     let it = items.get(l.item);
-    if (!it) { it = { item: l.item, qty: 0, vars: new Map() }; items.set(l.item, it); }
+    if (!it) { it = { item: l.item, qty: 0, sets: 0, vars: new Map() }; items.set(l.item, it); }
     it.qty += cupsOf(l);
-    const vk = variantText(l);
-    let v = it.vars.get(vk);
-    if (!v) { v = { label: vk, qty: 0, bogo: !!l.bogo, notes: [] }; it.vars.set(vk, v); }
-    v.qty += l.qty; if (l.note) v.notes.push(o.name + '：' + l.note);
+    // 買一送一拆成兩杯各自統計（兩杯口味可能不同），店家照杯數做
+    const cups = l.bogo ? [l.opts || [], cup2Of(l)] : [l.opts || []];
+    if (l.bogo) it.sets += l.qty;
+    cups.forEach((opts, ci) => {
+      const vk = [l.bogo ? BOGO : '', l.size, ...opts].filter(Boolean).join(' ');
+      let v = it.vars.get(vk);
+      if (!v) { v = { label: vk, qty: 0, bogo: !!l.bogo, notes: [] }; it.vars.set(vk, v); }
+      v.qty += l.qty; if (l.note && ci === 0) v.notes.push(o.name + '：' + l.note);
+    });
   }));
   const idx = n => { const i = order.indexOf(n); return i < 0 ? 999 : i; };
   const list = [...items.values()].sort((a, b) => idx(a.item) - idx(b.item)).map(it => Object.assign(it, { vars: [...it.vars.values()].sort((a, b) => b.qty - a.qty) }));
@@ -994,10 +1016,13 @@ function summarize(g) {
 }
 function storeText(g) {
   const s = summarize(g), out = [`【${g.shop}】${fmtDate(g.deadline)} 共 ${s.qty} 份 ${money(s.total)}`];
-  s.list.forEach(it => it.vars.forEach(v => {
-    out.push(`${it.item}${v.label ? ' ' + v.label : ''} ×${v.qty}${v.bogo ? ` 組（${v.qty * 2} 杯）` : ''}`);
-    v.notes.forEach(n => out.push('　備註 ' + n));
-  }));
+  s.list.forEach(it => {
+    it.vars.forEach(v => {
+      out.push(`${it.item}${v.label ? ' ' + v.label : ''} ×${v.qty}${v.bogo ? ' 杯' : ''}`);
+      v.notes.forEach(n => out.push('　備註 ' + n));
+    });
+    if (it.sets) out.push(`　（${it.item} ${BOGO}共 ${it.sets} 組）`);
+  });
   return out.join('\n');
 }
 function statsHtml(g) {
@@ -1018,7 +1043,7 @@ function statsHtml(g) {
       ${s.list.map(it => {
         const simple = it.vars.length === 1 && !it.vars[0].label && !it.vars[0].notes.length;
         return `<div class="srow"><span class="nm">${esc(it.item)}</span><span class="q">×${it.qty}</span></div>` + (simple ? '' :
-          `<div class="svars">${it.vars.map(v => `<div class="svar">${v.label ? `<span class="tags">${v.label.split(' ').map(t => `<span class="tag">${esc(t)}</span>`).join('')}</span>` : '<span class="muted">一般</span>'}<span class="q">×${v.qty}${v.bogo ? ' 組' : ''}</span></div>${v.notes.map(n => `<div class="snote">備註 ${esc(n)}</div>`).join('')}`).join('')}</div>`);
+          `<div class="svars">${it.vars.map(v => `<div class="svar">${v.label ? `<span class="tags">${v.label.split(' ').map(t => `<span class="tag">${esc(t)}</span>`).join('')}</span>` : '<span class="muted">一般</span>'}<span class="q">×${v.qty}${v.bogo ? ' 杯' : ''}</span></div>${v.notes.map(n => `<div class="snote">備註 ${esc(n)}</div>`).join('')}`).join('')}${it.sets ? `<div class="snote">${BOGO}共 ${it.sets} 組</div>` : ''}</div>`);
       }).join('')}
     </div>
     <div class="block">
@@ -1026,6 +1051,7 @@ function statsHtml(g) {
       <div class="filters"><button class="fchip ${S.unpaidOnly ? '' : 'on'}" data-act="filter" data-v="0">全部 ${rows.length}</button><button class="fchip ${S.unpaidOnly ? 'on' : ''}" data-act="filter" data-v="1">未付 ${unpaid.length}</button></div>
       <div style="margin-top:6px">${shown.map(o => { const ps = payState(o); return `<div class="prow">${avatar(o.name, 'sm')}<span class="nm">${esc(o.name)}</span><span class="amt">${money(o.total)}</span><span class="st ${ps.k}">${ps.t}</span>${S.collecting ? `<button class="tog ${ps.k === 'paid' ? 'on' : ''}" data-act="paid" data-name="${esc(o.name)}" aria-label="${esc(o.name)} 已付款"></button>` : ''}</div>`; }).join('') || '<div class="prow muted">都付清了</div>'}</div>
     </div>
+    <a class="btn line" style="margin-top:16px" href="#" data-act="share-stats">${I.share}分享統計到 LINE</a>
     <p class="foot-note">LINE 群組輸入「統計」或「未付」也看得到這些資料</p>`;
 }
 
@@ -1126,27 +1152,36 @@ function openItem(gid, itemName, editIdx) {
   const shop = shopOf(g), m = menuOf(g.shop).find(x => x.item === itemName); if (!m) return;
   const drink = shop.type === '飲料', groups = optionsFor(shop);
   const sz = sizesOf(m), disc = parseDisc(m.disc), pr = promoOf(g, m.item);
+  const prSize = pr && m.priceL && sz.includes(pr.size) ? pr.size : '';     // 買一送一限定的容量（例如只有 L）
   const base = editIdx != null ? myLines(gid)[editIdx] : null;
-  const st = { size: m.priceL ? (base && sz.includes(base.size) ? base.size : sz[0]) : '', qty: base ? base.qty : 1, sel: {} };
-  // 買一送一：一組 2 杯同款、付原價；「只能點買一送一」時不能單杯
+  const st = { size: m.priceL ? (base && sz.includes(base.size) ? base.size : sz[0]) : '', qty: base ? base.qty : 1, sel: { 1: {}, 2: {} } };
+  // 買一送一：一組 2 杯、付原價，兩杯甜度冰塊可以不同；「只能點買一送一」時不能單杯
   st.bogo = !!pr && (pr.only || (base ? !!base.bogo : true));
-  groups.forEach(gr => { st.sel[gr.name] = new Set(); });
-  if (base) base.opts.forEach(o => { const gr = groups.find(x => x.items.some(i => i.label === o)); if (gr) st.sel[gr.name].add(o); });
+  st.same = !base || !cupsDiffer(base);
+  if (st.bogo && prSize) st.size = prSize;
+  [1, 2].forEach(c => groups.forEach(gr => { st.sel[c][gr.name] = new Set(); }));
+  const load = (c, list) => list.forEach(o => { const gr = groups.find(x => x.items.some(i => i.label === o)); if (gr) st.sel[c][gr.name].add(o); });
+  if (base) { load(1, base.opts); load(2, cup2Of(base)); }
   const raw = s => (m.priceL && s === sz[1] ? m.priceL : m.price);
   const cupPrice = s => st.bogo ? raw(s) : applyDisc(raw(s), disc);
-  const unit = () => cupPrice(st.size) + groups.reduce((s, gr) => s + gr.items.reduce((t, i) => t + (st.sel[gr.name].has(i.label) ? i.add : 0), 0), 0);
-  const opts = () => groups.flatMap(gr => gr.items.filter(i => st.sel[gr.name].has(i.label)).map(i => i.label));
+  const addOf = c => groups.reduce((s, gr) => s + gr.items.reduce((t, i) => t + (st.sel[c][gr.name].has(i.label) ? i.add : 0), 0), 0);
+  const twoCups = () => st.bogo && !st.same;
+  const unit = () => cupPrice(st.size) + addOf(1) + (st.bogo ? addOf(twoCups() ? 2 : 1) : 0);
+  const opts = c => groups.flatMap(gr => gr.items.filter(i => st.sel[c][gr.name].has(i.label)).map(i => i.label));
   const p1 = applyDisc(m.price, disc), p2 = applyDisc(m.priceL, disc);
+  const optsHtml = () => groups.map(gr => `<div class="ogrp" data-g="${esc(gr.name)}"><div class="ogrp-h"><span>${esc(gr.name)}</span><span class="req ${gr.required ? 'must' : ''}">${gr.required ? '必選' : gr.multi ? '可複選' : '選填'}</span></div>
+      <div class="chips">${gr.items.map(i => `<button class="chip" data-opt="${esc(i.label)}">${esc(i.label)}${i.add ? ` <small>+${i.add}</small>` : ''}</button>`).join('')}</div></div>`).join('');
   const html = `
     <h2 class="sh-h">${esc(m.item)}</h2>
     <div class="sh-sub">${m.desc ? esc(m.desc) + ' · ' : ''}${m.priceL ? `${esc(sz[0])} ${money(p1)} / ${esc(sz[1])} ${money(p2)}` : money(p1)}${disc ? ' · 已' + discText(disc) : ''}</div>
-    ${pr ? `<div class="ogrp" data-g="__plan"><div class="ogrp-h"><span>今日${BOGO}</span><span class="req must">${pr.only ? '只能點' + BOGO : '必選'}</span></div><div class="chips">
+    ${pr ? `<div class="ogrp" data-g="__plan"><div class="ogrp-h"><span>今日${BOGO}${prSize ? '（限 ' + esc(prSize) + '）' : ''}</span><span class="req must">${pr.only ? '只能點' + BOGO : '必選'}</span></div><div class="chips">
       <button class="chip" data-plan="1">${BOGO}（2 杯）</button>${pr.only ? '' : `<button class="chip" data-plan="0">單杯</button>`}</div>
-      <div class="hint">一組是 2 杯同容量、同甜度冰塊，付原價。兩杯想要不同口味就點兩組，或跟同事合點。</div></div>` : ''}
+      <div class="hint">一組 2 杯${prSize ? '、限 ' + esc(prSize) : '同容量'}，付原價；兩杯的甜度、冰塊可以分開選。</div></div>` : ''}
     ${m.priceL ? `<div class="ogrp" data-g="__size"><div class="ogrp-h"><span>容量</span><span class="req must">必選</span></div><div class="chips">
-      <button class="chip" data-size="${esc(sz[0])}">${esc(sz[0])} <small data-szp="${esc(sz[0])}"></small></button><button class="chip" data-size="${esc(sz[1])}">${esc(sz[1])} <small data-szp="${esc(sz[1])}"></small></button></div></div>` : ''}
-    ${groups.map(gr => `<div class="ogrp" data-g="${esc(gr.name)}"><div class="ogrp-h"><span>${esc(gr.name)}</span><span class="req ${gr.required ? 'must' : ''}">${gr.required ? '必選' : gr.multi ? '可複選' : '選填'}</span></div>
-      <div class="chips">${gr.items.map(i => `<button class="chip" data-opt="${esc(i.label)}">${esc(i.label)}${i.add ? ` <small>+${i.add}</small>` : ''}</button>`).join('')}</div></div>`).join('')}
+      ${sz.map(s => `<button class="chip" data-size="${esc(s)}">${esc(s)} <small data-szp="${esc(s)}"></small></button>`).join('')}</div></div>` : ''}
+    ${pr ? `<div class="switch-row" id="it-samerow"><span><b>第 2 杯跟第 1 杯一樣</b><small>關掉就能幫第 2 杯選不同的甜度、冰塊、加料</small></span><button class="tog" id="it-same" aria-label="第 2 杯跟第 1 杯一樣"></button></div>` : ''}
+    <div class="cup" data-cup="1"><div class="cup-h" hidden>第 1 杯</div>${optsHtml()}</div>
+    ${pr ? `<div class="cup" data-cup="2" hidden><div class="cup-h">第 2 杯</div>${optsHtml()}</div>` : ''}
     <div class="ogrp"><div class="ogrp-h"><label for="it-note">備註</label><span class="req">選填</span></div>
       <input class="field" id="it-note" maxlength="60" placeholder="${drink ? '例如：分開裝、吸管另外給' : '例如：雞腿去皮、醬汁另外裝'}" value="${esc(base ? base.note : '')}"></div>
     ${drink ? `<div class="tlabel" aria-hidden="true"><div class="tl-top"><span>${esc(g.shop)}</span><span>${esc(S.me)}</span></div><div class="tl-item" id="tl-item"></div><div class="tl-opts" id="tl-opts"></div><div class="tl-bot"><span class="bars"></span><b class="num" id="tl-price"></b></div></div>` : ''}
@@ -1157,28 +1192,42 @@ function openItem(gid, itemName, editIdx) {
   openSheet('item', html, {
     mount(root) {
       const paint = () => {
-        $$('[data-size]', root).forEach(c => c.classList.toggle('on', c.dataset.size === st.size));
+        $$('[data-size]', root).forEach(c => { c.classList.toggle('on', c.dataset.size === st.size); c.hidden = st.bogo && !!prSize && c.dataset.size !== prSize; });
         $$('[data-szp]', root).forEach(c => { c.textContent = (st.bogo ? '2 杯 ' : '') + money(cupPrice(c.dataset.szp)); });
         $$('[data-plan]', root).forEach(c => c.classList.toggle('on', (c.dataset.plan === '1') === st.bogo));
-        $$('.ogrp[data-g]', root).forEach(gEl => { const set = st.sel[gEl.dataset.g]; if (set) $$('[data-opt]', gEl).forEach(c => c.classList.toggle('on', set.has(c.dataset.opt))); });
+        $$('.cup', root).forEach(cupEl => {
+          const c = +cupEl.dataset.cup;
+          $$('.ogrp[data-g]', cupEl).forEach(gEl => { const set = st.sel[c][gEl.dataset.g]; if (set) $$('[data-opt]', gEl).forEach(b => b.classList.toggle('on', set.has(b.dataset.opt))); });
+        });
+        const sr = $('#it-samerow', root); if (sr) sr.hidden = !st.bogo;
+        const sw = $('#it-same', root); if (sw) sw.classList.toggle('on', st.same);
+        const c2 = $('.cup[data-cup="2"]', root); if (c2) c2.hidden = !twoCups();
+        $('.cup[data-cup="1"] .cup-h', root).hidden = !twoCups();
         $('#it-q', root).textContent = st.bogo ? st.qty + ' 組' : st.qty;
         $('#it-add', root).textContent = (base ? '更新 · ' : '加入 · ') + (st.bogo ? st.qty * 2 + ' 杯 ' : '') + money(unit() * st.qty);
         if (drink) {
           $('#tl-item', root).textContent = m.item + (st.size ? ' ' + st.size : '') + (st.bogo ? ' ×2' : '');
-          const o = opts(), el = $('#tl-opts', root);
-          el.textContent = o.length ? o.join(' / ') : '還沒選甜度、冰塊'; el.classList.toggle('ph', !o.length);
+          const o1 = opts(1), o2 = opts(2), el = $('#tl-opts', root);
+          el.textContent = !o1.length ? '還沒選甜度、冰塊' : twoCups() ? '①' + o1.join(' / ') + '　②' + (o2.join(' / ') || '還沒選') : o1.join(' / ');
+          el.classList.toggle('ph', !o1.length);
           $('#tl-price', root).textContent = (st.bogo ? BOGO + ' ' : '') + money(unit()) + (st.qty > 1 ? ' ×' + st.qty : '');
         }
       };
       paint();
       root.addEventListener('click', e => {
-        const sz = e.target.closest('[data-size]');
-        if (sz) { st.size = sz.dataset.size; return paint(); }
+        const szb = e.target.closest('[data-size]');
+        if (szb) { st.size = szb.dataset.size; return paint(); }
         const pl = e.target.closest('[data-plan]');
-        if (pl) { st.bogo = pl.dataset.plan === '1'; return paint(); }
+        if (pl) { st.bogo = pl.dataset.plan === '1'; if (st.bogo && prSize) st.size = prSize; return paint(); }
+        if (e.target.closest('#it-same')) {
+          st.same = !st.same;
+          if (!st.same) groups.forEach(gr => { st.sel[2][gr.name] = new Set(st.sel[1][gr.name]); });   // 先複製第 1 杯再改
+          return paint();
+        }
         const op = e.target.closest('[data-opt]');
         if (op) {
-          const gr = groups.find(x => x.name === op.closest('.ogrp').dataset.g), set = st.sel[gr.name], v = op.dataset.opt;
+          const c = +op.closest('.cup').dataset.cup;
+          const gr = groups.find(x => x.name === op.closest('.ogrp').dataset.g), set = st.sel[c][gr.name], v = op.dataset.opt;
           if (gr.multi) { set.has(v) ? set.delete(v) : set.add(v); }
           else if (set.has(v) && !gr.required) set.clear();
           else { set.clear(); set.add(v); }
@@ -1187,13 +1236,15 @@ function openItem(gid, itemName, editIdx) {
         const q = e.target.closest('[data-q]');
         if (q) { st.qty = Math.min(20, Math.max(1, st.qty + +q.dataset.q)); return paint(); }
         if (e.target.closest('#it-add')) {
-          const miss = groups.filter(gr => gr.required && !st.sel[gr.name].size);
-          if (miss.length) {
-            miss.forEach(gr => { const el = $(`.ogrp[data-g="${CSS.escape(gr.name)}"]`, root); el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); });
-            $(`.ogrp[data-g="${CSS.escape(miss[0].name)}"]`, root).scrollIntoView({ block: 'center', behavior: 'smooth' });
-            return toast('還沒選' + miss.map(x => x.name).join('、'));
+          for (const c of twoCups() ? [1, 2] : [1]) {
+            const miss = groups.filter(gr => gr.required && !st.sel[c][gr.name].size);
+            if (miss.length) {
+              miss.forEach(gr => { const el = $(`.cup[data-cup="${c}"] .ogrp[data-g="${CSS.escape(gr.name)}"]`, root); el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); });
+              $(`.cup[data-cup="${c}"] .ogrp[data-g="${CSS.escape(miss[0].name)}"]`, root).scrollIntoView({ block: 'center', behavior: 'smooth' });
+              return toast((twoCups() ? '第 ' + c + ' 杯' : '') + '還沒選' + miss.map(x => x.name).join('、'));
+            }
           }
-          const line = { item: m.item, bogo: st.bogo, size: m.priceL ? st.size : '', opts: opts(), unit: unit(), qty: st.qty, note: $('#it-note', root).value.trim() };
+          const line = { item: m.item, bogo: st.bogo, size: m.priceL ? st.size : '', opts: opts(1), opts2: twoCups() ? opts(2) : [], unit: unit(), qty: st.qty, note: $('#it-note', root).value.trim() };
           const lines = myLines(gid);
           if (base) lines.splice(editIdx, 1);
           const same = lines.find(l => lineKey(l) === lineKey(line));
@@ -1326,9 +1377,13 @@ function openSecHtml(type) {
       const os = left.filter(m => (m.cat || '其他') === c);
       return os.length ? `<optgroup label="${esc(c)}">${os.map(m => `<option value="${esc(m.item)}">${esc(m.item)}</option>`).join('')}</optgroup>` : '';
     }).join('')}</select><button class="btn auto ghost" data-act="promo-add" data-type="${type}">加入</button></div>` : ''}
-    ${F.promos.map((p, i) => `<div class="arow"><div class="t"><b>${esc(p.item)}</b><small>${p.only ? '只能點' + BOGO + '，不能單杯' : '可以選' + BOGO + '或單杯'}</small></div>
+    ${F.promos.map((p, i) => {
+      const pm = items.find(x => x.item === p.item), psz = pm && pm.priceL ? sizesOf(pm) : [];
+      return `<div class="prm"><div class="arow"><div class="t"><b>${esc(p.item)}</b><small>${p.size ? '限 ' + esc(p.size) + '，' : ''}${p.only ? '只能點' + BOGO + '，不能單杯' : '也可以點單杯'}</small></div>
       <span class="muted" style="font-size:12.5px">只能${BOGO}</span><button class="tog ${p.only ? 'on' : ''}" data-act="promo-only" data-type="${type}" data-i="${i}" aria-label="只能點${BOGO}"></button>
-      <button class="mini del" data-act="promo-del" data-type="${type}" data-i="${i}" aria-label="移除">${I.x}</button></div>`).join('')}
+      <button class="mini del" data-act="promo-del" data-type="${type}" data-i="${i}" aria-label="移除">${I.x}</button></div>
+      ${psz.length ? `<div class="chips sm prm-sz"><span class="muted">${BOGO}限定</span>${psz.map(s => `<button class="chip ${p.size === s ? 'on' : ''}" data-act="promo-size" data-type="${type}" data-i="${i}" data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div>` : ''}</div>`;
+    }).join('')}
     ${F.promos.length ? '' : `<div class="hint">${BOGO}：一組 2 杯同款同容量，付原價（不打折）。</div>`}
   </div>`;
 }
@@ -1581,8 +1636,10 @@ const ADMIN_ACT = {
   'promo-add': el => {
     const t = el.dataset.type, v = $(`[data-f="opitem"][data-type="${t}"]`).value;
     if (!v) return toast('先選一個品項');
-    S.openForm[t].promos.push({ item: v, only: true }); repaintOpen();
+    const m = menuOf(S.openForm[t].shop).find(x => x.item === v);
+    S.openForm[t].promos.push({ item: v, only: true, size: m && m.priceL ? sizesOf(m)[0] : '' }); repaintOpen();   // 預設限第一種容量（通常是 L）
   },
+  'promo-size': el => { S.openForm[el.dataset.type].promos[+el.dataset.i].size = el.dataset.v; repaintOpen(); },
   'promo-only': el => { const p = S.openForm[el.dataset.type].promos[+el.dataset.i]; p.only = !p.only; repaintOpen(); },
   'promo-del': el => { S.openForm[el.dataset.type].promos.splice(+el.dataset.i, 1); repaintOpen(); },
   'do-open': async el => {
@@ -1598,15 +1655,21 @@ const ADMIN_ACT = {
         const r = await api('openGroup', { pin: PIN, shop: F.shop, deadline: F.dl, note: F.note.trim(), promos: F.promos });
         ids.push(r.id); F.shop = ''; F.promos = []; F.note = '';      // 開成功的就清掉，失敗重按不會重複開
       }
-      S.openForm = null; toast(names.length > 1 ? '開了 ' + names.length + ' 團：' + names.join('、') : '開團了：' + names[0]); await refresh();
+      S.openForm = null; await refresh();
       location.hash = ids.length === 1 && ids[0] ? 'g-' + ids[0] : '';
+      // 開好就跳出「分享到 LINE」，用自己的帳號發，不花官方帳號額度
+      const gs = ids.map(id => S.data.groups.find(g => g.id === id)).filter(Boolean);
+      setTimeout(() => shareSheet(names.length > 1 ? '開了 ' + names.length + ' 團' : '開團了', inviteText(gs)), 80);
     } catch (err) { toast(err.message || '沒有成功，再試一次'); await refresh(); repaintOpen(); }
   },
   'grp-op': async el => {
     const op = el.dataset.op, map = { close: ['closeGroup', {}], extend: ['extendGroup', { minutes: 15 }], reopen: ['extendGroup', { minutes: 30 }] }[op];
     el.disabled = true;
-    try { await api(map[0], Object.assign({ pin: PIN, groupId: el.dataset.id }, map[1])); toast(op === 'close' ? '已結單' : '已延長'); S.sig = ''; await refresh(); }
-    catch (err) { toast(err.message || '沒有成功，再試一次'); el.disabled = false; }
+    try {
+      await api(map[0], Object.assign({ pin: PIN, groupId: el.dataset.id }, map[1])); S.sig = ''; await refresh();
+      const g = S.data.groups.find(x => x.id === el.dataset.id);
+      if (op === 'close' && g) shareSheet('已結單', statsShareText(g)); else toast(op === 'close' ? '已結單' : '已延長');
+    } catch (err) { toast(err.message || '沒有成功，再試一次'); el.disabled = false; }
   },
   'grp-del': async el => {
     const g = S.data.groups.find(x => x.id === el.dataset.id); if (!g) return;
@@ -1739,8 +1802,43 @@ async function copyText(txt) {
       { mount(root) { const ta = $('#cp-t', root); ta.focus(); ta.select(); } });
   }
 }
+/* ================= 分享到 LINE（用自己的帳號發，不花官方帳號額度） ================= */
+const SITE = location.origin + location.pathname.replace(/index\.html$/, '');
+const groupUrl = g => SITE + '#g-' + g.id;
+function inviteText(gs) {
+  const out = ['今天揪團囉，截止前都能點、能改：'];
+  gs.forEach(g => {
+    out.push('', `【${g.shop}】${fmtTime(g.deadline)} 截止`);
+    if ((g.promos || []).length) out.push(BOGO + '：' + g.promos.map(p => p.item + (p.size ? ' ' + p.size : '')).join('、'));
+    if (g.note) out.push(g.note);
+  });
+  out.push('', '點餐 👉 ' + (gs.length === 1 ? groupUrl(gs[0]) : SITE));
+  return out.join('\n');
+}
+function statsShareText(g) {
+  const s = summarize(g), unpaid = s.os.filter(o => payState(o).k !== 'paid');
+  const out = [`【${g.shop}】${fmtDate(g.deadline)} 結單`, `共 ${s.os.length} 人 · ${s.qty} 份 · ${money(s.total)}`, ''];
+  s.list.forEach(it => out.push(`${it.item} ×${it.qty}`));
+  out.push('', unpaid.length ? `還沒付（${unpaid.length} 人）：` + unpaid.map(o => o.name + ' ' + money(o.total - (+o.paid || 0))).join('、') : '大家都付清了，謝謝！');
+  out.push('', '明細 👉 ' + groupUrl(g));
+  return out.join('\n');
+}
+function shareSheet(title, text) {
+  openSheet('share', `<h2 class="sh-h">${esc(title)}</h2><div class="sh-sub">按「分享到 LINE」選群組就能送出，文字送出前還能改。</div>
+    <textarea class="field" id="sh-t" style="margin-top:12px;min-height:220px" readonly>${esc(text)}</textarea>
+    <div class="sheet-foot"><button class="btn ghost auto" id="sh-copy">${I.copy}複製</button><a class="btn line" href="https://line.me/R/share?text=${encodeURIComponent(text)}" target="_blank" rel="noopener">${I.share}分享到 LINE</a></div>`, {
+    mount(root) {
+      $('#sh-copy', root).addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(text); toast('已複製'); } catch (e) { const ta = $('#sh-t', root); ta.focus(); ta.select(); toast('長按選取後複製'); }
+      });
+    },
+  });
+}
+
 const ACT = {
   'open-group': el => { location.hash = 'g-' + el.dataset.id; },
+  'share-invite': () => { const g = curGroup(); if (g) shareSheet('分享這一團', inviteText([g])); },
+  'share-stats': () => { const g = curGroup(); if (g) shareSheet('分享統計', statsShareText(g)); },
   back: () => { if (location.hash) location.hash = ''; else route(); },
   tab: el => { S.tab = el.dataset.tab; renderTop(); renderMain(); window.scrollTo(0, 0); },
   cat: el => { const s = $('#cat-' + el.dataset.i); if (s) s.scrollIntoView({ behavior: 'smooth', block: 'start' }); },

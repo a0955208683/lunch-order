@@ -108,7 +108,7 @@ const ACTIONS = {
     // 今日買一送一：只收這家店菜單裡有的品項
     const items = readAll_().menu.filter(m => m.shop === shop).map(m => m.item), seen = {};
     const promos = (Array.isArray(p.promos) ? p.promos : []).filter(x => x && items.indexOf(x.item) >= 0 && !seen[x.item] && (seen[x.item] = true))
-      .slice(0, 20).map(x => ({ item: String(x.item), only: !!x.only }));
+      .slice(0, 20).map(x => ({ item: String(x.item), only: !!x.only, size: String(x.size || '').trim().slice(0, 6) }));
     const sh = sheet_('groups');
     sh.getRange(1, 1, 1, HEAD.groups.length).setValues([HEAD.groups]).setFontWeight('bold').setBackground('#DDEFE3');
     sh.appendRow([id, shop, new Date(dl), ST_OPEN, String(p.note || '').slice(0, 80), new Date(), '', promos.length ? JSON.stringify(promos) : '']);
@@ -372,12 +372,17 @@ function summarize_(g, d) {
   const order = d.menu.filter(m => m.shop === g.shop).map(m => m.item);
   const items = {};
   os.forEach(o => o.lines.forEach(l => {
-    const it = items[l.item] || (items[l.item] = { item: l.item, qty: 0, vars: {} });
+    const it = items[l.item] || (items[l.item] = { item: l.item, qty: 0, sets: 0, vars: {} });
     it.qty += l.qty * (l.bogo ? 2 : 1);                 // 買一送一的一組是 2 杯
-    const vk = variant_(l);
-    const v = it.vars[vk] || (it.vars[vk] = { label: vk, qty: 0, bogo: !!l.bogo, notes: [] });
-    v.qty += l.qty;
-    if (l.note) v.notes.push(o.name + '：' + l.note);
+    if (l.bogo) it.sets += l.qty;
+    // 買一送一拆成兩杯各自統計（兩杯甜度冰塊可能不同），店家照杯數做
+    const cups = l.bogo ? [l.opts || [], cup2_(l)] : [l.opts || []];
+    cups.forEach((opts, ci) => {
+      const vk = [l.bogo ? '買一送一' : '', l.size].concat(opts).filter(String).join(' ');
+      const v = it.vars[vk] || (it.vars[vk] = { label: vk, qty: 0, bogo: !!l.bogo, notes: [] });
+      v.qty += l.qty;
+      if (l.note && ci === 0) v.notes.push(o.name + '：' + l.note);
+    });
   }));
   const idx = n => { const i = order.indexOf(n); return i < 0 ? 999 : i; };
   const list = Object.keys(items).map(k => items[k]).sort((a, b) => idx(a.item) - idx(b.item)).map(it => {
@@ -408,7 +413,8 @@ function bubble_(g, d) {
   s.list.slice(0, 25).forEach(it => {
     const simple = it.vars.length === 1 && !it.vars[0].label;
     itemRows.push(row(it.item, '×' + it.qty, { l: { weight: 'bold' }, r: { weight: 'bold' } }));
-    if (!simple) it.vars.forEach(v => itemRows.push(row('　' + (v.label || '一般'), '×' + v.qty + (v.bogo ? ' 組' : ''), { l: { color: muted, size: 'xs' }, r: { color: muted, size: 'xs' } })));
+    if (!simple) it.vars.forEach(v => itemRows.push(row('　' + (v.label || '一般'), '×' + v.qty + (v.bogo ? ' 杯' : ''), { l: { color: muted, size: 'xs' }, r: { color: muted, size: 'xs' } })));
+    if (it.sets) itemRows.push(txt('　買一送一共 ' + it.sets + ' 組', { size: 'xxs', color: muted }));
     it.vars.forEach(v => v.notes.forEach(n => itemRows.push(txt('　備註 ' + n, { size: 'xxs', color: muted }))));
   });
   const peopleRows = s.os.slice(0, 35).map(o => {
@@ -572,13 +578,20 @@ function cleanLines_(lines) {
     bogo: !!l.bogo,
     size: String(l.size || '').trim().slice(0, 6),
     opts: (Array.isArray(l.opts) ? l.opts : []).map(String).slice(0, 12),
+    opts2: l.bogo && Array.isArray(l.opts2) ? l.opts2.map(String).slice(0, 12) : [],
     unit: Math.max(0, Math.round(+l.unit || 0)),
     qty: Math.min(50, Math.max(1, Math.round(+l.qty))),
     note: String(l.note || '').slice(0, 60),
   }));
 }
 function sumAmt_(lines) { return lines.reduce((s, l) => s + l.unit * l.qty, 0); }
-function variant_(l) { return [l.bogo ? '買一送一' : '', l.size].concat(l.opts || []).filter(String).join(' '); }
+// 買一送一第 2 杯的選項；沒有另外選就跟第 1 杯一樣
+function cup2_(l) { return l.opts2 && l.opts2.length ? l.opts2 : (l.opts || []); }
+function variant_(l) {
+  const v = [l.bogo ? '買一送一' : '', l.size].concat(l.opts || []).filter(String).join(' ');
+  const c2 = cup2_(l).join(' ');
+  return l.bogo && c2 !== (l.opts || []).join(' ') ? v + '／第2杯 ' + c2 : v;
+}
 function linesText_(lines) {
   return lines.map(l => l.item + (variant_(l) ? ' ' + variant_(l) : '') +
     ' ×' + l.qty + (l.bogo ? ' 組' : '') + (l.note ? '（' + l.note + '）' : '')).join('；');
