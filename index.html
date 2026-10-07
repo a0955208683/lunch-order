@@ -427,8 +427,13 @@ textarea.field{height:auto;min-height:150px;padding:10px 12px;line-height:1.6;re
 .field.bad,.money-in.bad{border-color:var(--chili)!important;background:var(--chili-soft)}
 .btn.danger{color:var(--chili)}
 
+.busy{position:fixed;inset:0;z-index:80;display:grid;place-items:center;background:rgba(0,0,0,.12)}
+.busy-in{display:flex;align-items:center;gap:12px;background:var(--ink);color:var(--bg);padding:14px 20px;border-radius:16px;font-weight:500;font-size:15px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+.spin{width:20px;height:20px;border:2.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{transition:none!important;animation:none!important}
+  .spin{animation:spin 1.6s linear infinite!important}
 }
 </style>
 </head>
@@ -444,6 +449,7 @@ textarea.field{height:auto;min-height:150px;padding:10px 12px;line-height:1.6;re
   <div class="sheet-body" id="sheetBody"></div>
 </section>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="busy" id="busy" hidden><div class="busy-in" role="status" aria-live="polite"><span class="spin"></span><span id="busy-t"></span></div></div>
 
 <script>
 'use strict';
@@ -1687,13 +1693,13 @@ async function saveShop() {
     }
   }
   if (!items.length) return toast('菜單至少要有一個品項');
-  E.saving = true; renderBar();
+  E.saving = true; renderBar(); const done = busy("儲存中…");
   try {
     await api('saveShop', { pin: PIN, orig: E.orig, shop: Object.assign({}, E.shop, { name }), items });
     E.dirty = false; E.orig = name; toast('已儲存「' + name + '」');
     await refresh(); renderTop();
   } catch (err) { toast(err.message || '沒有存到，再試一次'); }
-  E.saving = false; renderBar();
+  done(); E.saving = false; renderBar();
 }
 
 // 「# 分類 L/瓶」「# 拉麵類 小/大」：分類後面可以接兩種份量的名稱
@@ -1782,12 +1788,12 @@ async function saveOptions() {
       labels.add(lb);
     }
   }
-  O.saving = true; renderBar();
+  O.saving = true; renderBar(); const done = busy("儲存中…");
   try {
     await api('saveOptions', { pin: PIN, type: O.type, groups: O.groups });
     toast('已儲存「' + O.type + '」的選項'); await refresh(); loadOpt(O.type); renderMain();
   } catch (err) { toast(err.message || '沒有存到，再試一次'); O.saving = false; }
-  renderBar();
+  done(); renderBar();
 }
 
 function aMembersHtml() {
@@ -1801,10 +1807,10 @@ function aMembersHtml() {
   </div>`;
 }
 async function saveMembers() {
-  const M = S.mem; M.saving = true; renderBar();
+  const M = S.mem; M.saving = true; renderBar(); const done = busy("儲存中…");
   try { await api('saveMembers', { pin: PIN, members: M.list }); toast('已儲存名單'); await refresh(); S.mem = null; renderMain(); }
   catch (err) { toast(err.message || '沒有存到，再試一次'); M.saving = false; }
-  renderBar();
+  done(); renderBar();
 }
 
 // 編輯器的結構操作：改完重畫並標記有修改
@@ -1838,34 +1844,37 @@ const ADMIN_ACT = {
     }
     el.disabled = true;
     const ids = [], names = secs.map(F => F.shop);
+    const done = busy(names.length > 1 ? '開團中…（' + names.length + ' 團）' : '開團中…');
     try {
       for (const F of secs) {
         const r = await api('openGroup', { pin: PIN, shop: F.shop, deadline: F.dl, note: F.note.trim(), promos: F.promos });
         ids.push(r.id); F.shop = ''; F.promos = []; F.note = '';      // 開成功的就清掉，失敗重按不會重複開
       }
-      S.openForm = null; await refresh();
+      S.openForm = null; await refresh(); done();
       location.hash = ids.length === 1 && ids[0] ? 'g-' + ids[0] : '';
       // 開好就跳出「分享到 LINE」，用自己的帳號發，不花官方帳號額度
       const gs = ids.map(id => S.data.groups.find(g => g.id === id)).filter(Boolean);
       setTimeout(() => shareSheet(names.length > 1 ? '開了 ' + names.length + ' 團' : '開團了', inviteText(gs)), 80);
-    } catch (err) { toast(err.message || '沒有成功，再試一次'); await refresh(); repaintOpen(); }
+    } catch (err) { done(); toast(err.message || '沒有成功，再試一次'); await refresh(); repaintOpen(); }
   },
   'grp-op': async el => {
     const op = el.dataset.op, map = { close: ['closeGroup', {}], extend: ['extendGroup', { minutes: 15 }], reopen: ['extendGroup', { minutes: 30 }] }[op];
     el.disabled = true;
+    const done = busy(op === 'close' ? '結單中…' : op === 'extend' ? '延長中…' : '重新開放中…');
     try {
-      await api(map[0], Object.assign({ pin: PIN, groupId: el.dataset.id }, map[1])); S.sig = ''; await refresh();
+      await api(map[0], Object.assign({ pin: PIN, groupId: el.dataset.id }, map[1])); S.sig = ''; await refresh(); done();
       const g = S.data.groups.find(x => x.id === el.dataset.id);
       if (op === 'close' && g) shareSheet('已結單', statsShareText(g)); else toast(op === 'close' ? '已結單' : '已延長');
-    } catch (err) { toast(err.message || '沒有成功，再試一次'); el.disabled = false; }
+    } catch (err) { done(); toast(err.message || '沒有成功，再試一次'); el.disabled = false; }
   },
   'grp-del': async el => {
     const g = S.data.groups.find(x => x.id === el.dataset.id); if (!g) return;
     const n = ordersOf(g.id).length;
     const ok = await confirmSheet('刪除這一團', `「${g.shop}」${fmtDate(g.deadline)} ${fmtTime(g.deadline)} 截止的團${n ? `，連同 ${n} 個人的訂單` : ''}會一起刪除，刪了就找不回來。`, '刪除', true);
     if (!ok) return;
-    try { await api('deleteGroup', { pin: PIN, groupId: g.id }); toast('已刪除「' + g.shop + '」這一團'); S.sig = ''; await refresh(); }
-    catch (err) { toast(err.message || '沒有成功，再試一次'); }
+    const done = busy('刪除中…');
+    try { await api('deleteGroup', { pin: PIN, groupId: g.id }); S.sig = ''; await refresh(); done(); toast('已刪除「' + g.shop + '」這一團'); }
+    catch (err) { done(); toast(err.message || '沒有成功，再試一次'); }
   },
   'edit-shop': el => startEdit(el.dataset.name),
   'to-admin': () => { location.hash = 'admin'; },
@@ -1891,8 +1900,9 @@ const ADMIN_ACT = {
   'ed-delshop': async () => {
     const name = S.edit.orig;
     if (!(await confirmSheet('刪除「' + name + '」', '店家和整份菜單都會刪除，已經點過的訂單紀錄會保留。', '刪除', true))) return;
-    try { await api('deleteShop', { pin: PIN, name }); S.edit.dirty = false; toast('已刪除 ' + name); await refresh(); location.hash = 'admin'; }
-    catch (err) { toast(err.message || '沒有成功，再試一次'); }
+    const done = busy('刪除中…');
+    try { await api('deleteShop', { pin: PIN, name }); S.edit.dirty = false; await refresh(); done(); toast('已刪除 ' + name); location.hash = 'admin'; }
+    catch (err) { done(); toast(err.message || '沒有成功，再試一次'); }
   },
   'opt-type': async el => {
     const v = el.dataset.v; if (v === S.opt.type) return;
@@ -1907,8 +1917,9 @@ const ADMIN_ACT = {
   'opt-revert': async () => {
     const key = S.opt.type;
     if (!(await confirmSheet('改回共用選項', '「' + key + '」的專屬選項會刪除，之後點餐改用共用的那一套。', '改回共用', true))) return;
-    try { await api('saveOptions', { pin: PIN, type: key, groups: [] }); toast('已改回共用選項'); await refresh(); loadOpt(key); renderMain(); renderBar(); }
-    catch (err) { toast(err.message || '沒有成功，再試一次'); }
+    const done = busy('處理中…');
+    try { await api('saveOptions', { pin: PIN, type: key, groups: [] }); await refresh(); done(); toast('已改回共用選項'); loadOpt(key); renderMain(); renderBar(); }
+    catch (err) { done(); toast(err.message || '沒有成功，再試一次'); }
   },
   'og-up': el => edChange(() => swap(S.opt.groups, +el.dataset.gi, +el.dataset.gi - 1)),
   'og-down': el => edChange(() => swap(S.opt.groups, +el.dataset.gi, +el.dataset.gi + 1)),
@@ -1978,6 +1989,13 @@ document.addEventListener('keydown', e => {
 window.addEventListener('beforeunload', e => { if (isDirty()) { e.preventDefault(); e.returnValue = ''; } });
 
 /* ================= 互動 ================= */
+// 等後端確認的操作（開團、刪除、儲存…）：畫面中間顯示「處理中」，期間擋住點擊，避免以為卡住或重複按
+let busyN = 0;
+function busy(text) {
+  busyN++; $('#busy-t').textContent = text; $('#busy').hidden = false;
+  let closed = false;
+  return () => { if (closed) return; closed = true; if (--busyN <= 0) { busyN = 0; $('#busy').hidden = true; } };
+}
 let toastT;
 function toast(msg) {
   const t = $('#toast'); t.innerHTML = esc(msg); t.classList.add('on');
