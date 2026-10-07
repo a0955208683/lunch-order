@@ -106,7 +106,8 @@ const ACTIONS = {
     if (!readShops_().some(s => s.name === shop && !s.disabled)) throw err_('NOSHOP', '找不到「' + shop + '」，或這家店暫停使用中');
     const dl = +p.deadline;
     if (!(dl > Date.now())) throw err_('BADTIME', '截止時間已經過了');
-    const id = Utilities.getUuid().replace(/-/g, '').slice(0, 8);
+    // 前面加 g：全是數字的 ID 會被試算表當成數字改掉（例如 01234567 → 1234567），就找不到這一團
+    const id = 'g' + Utilities.getUuid().replace(/-/g, '').slice(0, 7);
     // 今日買一送一：只收這家店菜單裡有的品項
     const items = readAll_().menu.filter(m => m.shop === shop), seen = {};
     const promos = (Array.isArray(p.promos) ? p.promos : []).filter(x => {
@@ -161,6 +162,7 @@ const ACTIONS = {
     }
     if (orig && row < 0) throw err_('NOSHOP', '找不到「' + orig + '」');
     const data = [name, type, String(s.phone || '').slice(0, 30), String(s.note || '').slice(0, 60), s.disabled ? 'Y' : ''];
+    sh.getRange('C2:C').setNumberFormat('@');      // 電話存成文字，開頭的 0 才不會被試算表吃掉
     if (row > 0) sh.getRange(row, 1, 1, data.length).setValues([data]);
     else sh.appendRow(data);
 
@@ -263,7 +265,8 @@ function readAll_() {
 function readShops_() {
   return rows_('shops').filter(r => r[0]).map(r => ({
     name: String(r[0]).trim(), type: String(r[1]).trim() === '飲料' ? '飲料' : '便當',
-    phone: String(r[2] || ''), note: String(r[3] || ''), disabled: yes_(r[4]),
+    // 舊資料的電話被試算表當成數字、吃掉開頭的 0；台灣電話都是 0 開頭，補回來
+    phone: typeof r[2] === 'number' ? '0' + r[2] : String(r[2] || ''), note: String(r[3] || ''), disabled: yes_(r[4]),
   }));
 }
 
@@ -551,6 +554,7 @@ function setup() {
   [['珍珠', 10], ['椰果', 10], ['仙草凍', 10], ['布丁', 15]].forEach(a => opt.push(['飲料', '加料', a[0], a[1], 'Y', '']));
   fill('options', opt);
   ss.getSheetByName(TAB.groups).getRange('C:C').setNumberFormat('yyyy/mm/dd hh:mm');
+  ss.getSheetByName(TAB.shops).getRange('C2:C').setNumberFormat('@');
   ss.getSheetByName(TAB.groups).getRange('F:G').setNumberFormat('yyyy/mm/dd hh:mm');
   ss.getSheetByName(TAB.orders).getRange('F:F').setNumberFormat('yyyy/mm/dd hh:mm');
   const s1 = ss.getSheetByName('工作表1') || ss.getSheetByName('Sheet1');
