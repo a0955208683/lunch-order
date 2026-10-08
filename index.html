@@ -137,6 +137,10 @@ svg{display:block;flex:none}
 .sugg:active{background:var(--surface-2)}
 .sugg + .sugg{border-top:1px solid var(--line)}
 .sugg small{margin-left:auto;color:var(--muted);font-size:12px;font-weight:400}
+.more{display:flex;align-items:center;justify-content:center;gap:4px;width:100%;height:40px;margin-top:8px;border-radius:12px;color:var(--leaf);font-weight:700;font-size:14px;background:transparent}
+.more:active{background:var(--surface-2)}
+.more-i{display:inline-flex;transform:rotate(90deg);transition:transform .2s}
+.more-i.up{transform:rotate(-90deg)}
 .sugg-empty{font-size:13px;color:var(--muted);padding:10px 6px}
 .picked{display:flex;align-items:center;gap:10px;background:var(--leaf-soft);border-radius:12px;padding:10px 10px 10px 14px}
 .picked b{flex:1;min-width:0;color:var(--leaf);font-size:16px}
@@ -952,7 +956,7 @@ const S = {
   view: 'home', gid: null, tab: 'menu', loaded: false, loadErr: null, sig: '',
   pending: {}, ver: {}, saveState: {}, timers: {}, at: {}, tries: {}, inflight: {},
   pinOk: false, collecting: false, unpaidOnly: false, adminTab: 'open',
-  edit: null, opt: null, mem: null, guardSkip: false,
+  edit: null, opt: null, mem: null, guardSkip: false, expand: {},
   sheet: null, sheetOnClose: null, sheetLocked: false,
 };
 
@@ -1752,9 +1756,17 @@ function suggestHtml(type) {
     .map(s => ({ s, score: fuzzy(s.name, F.q), used: lastUsed(s.name) }))
     .filter(x => x.score > 0).sort((a, b) => b.score - a.score || b.used - a.used || a.s.name.localeCompare(b.s.name, 'zh-Hant'));
   if (!list.length) return `<div class="sugg-empty">${F.q ? '找不到「' + esc(F.q) + '」' : '還沒有' + type + '店，先到「店家」新增'}</div>`;
-  return list.slice(0, 8).map(x => `<button class="sugg" data-act="o-pick" data-type="${type}" data-shop="${esc(x.s.name)}">
+  // 沒打字：只列最近常開的 4 家，其餘收在「看更多」；有打字：列出所有符合的
+  const k = 'sugg-' + type, shown = F.q || S.expand[k] ? list : list.slice(0, 4);
+  return shown.map(x => `<button class="sugg" data-act="o-pick" data-type="${type}" data-shop="${esc(x.s.name)}">
     <span class="glyph xs ${type === '飲料' ? 'drink' : 'bento'}">${type === '飲料' ? ART.tea : ART.bento}</span><span>${esc(x.s.name)}</span>${x.s.phone ? `<small>${esc(x.s.phone)}</small>` : ''}</button>`).join('')
-    + (list.length > 8 ? `<div class="sugg-empty">還有 ${list.length - 8} 家，多打幾個字縮小範圍</div>` : '');
+    + (F.q ? '' : moreBtn(k, list.length));
+}
+// 「看更多／收起」：超過 4 項才出現，預設收起
+const MORE_N = 4;
+function moreBtn(k, total) {
+  if (total <= MORE_N) return '';
+  return `<button class="more" data-act="expand" data-k="${esc(k)}">${S.expand[k] ? '收起' : '看更多（還有 ' + (total - MORE_N) + ' 家）'}<span class="more-i ${S.expand[k] ? 'up' : ''}">${I.chev}</span></button>`;
 }
 function openSecHtml(type) {
   const F = S.openForm[type], drink = type === '飲料';
@@ -1807,14 +1819,20 @@ function aGroupsHtml() {
 }
 
 function aShopsHtml() {
-  return `<div class="list" style="margin-top:14px">${S.data.shops.map(s => {
+  const card = s => {
     const n = menuOf(s.name).length, drink = s.type === '飲料';
     return `<button class="scard ${s.disabled ? 'off' : ''}" data-act="edit-shop" data-name="${esc(s.name)}">
       <span class="glyph sm ${drink ? 'drink' : 'bento'}">${drink ? ART.tea : ART.bento}</span>
       <span class="sc-b"><b>${esc(s.name)}</b><small class="num">${n} 個品項${s.phone ? ' · ' + esc(s.phone) : ''}</small></span>
       ${s.disabled ? '<span class="st unpaid">暫停</span>' : ''}${I.chev}</button>`;
-  }).join('')}
-  <button class="scard add" data-act="edit-shop" data-name="">${I.plusSm}新增店家</button></div>`;
+  };
+  // 便當、飲料分兩區，每區先列 4 家，其餘收在「看更多」
+  return ['便當', '飲料'].map(t => {
+    const list = S.data.shops.filter(s => s.type === t), k = 'shops-' + t;
+    if (!list.length) return '';
+    return `<div class="sect-h"><h2>${t}店</h2><span class="num">${list.length} 家</span></div>
+      <div class="list">${(S.expand[k] ? list : list.slice(0, MORE_N)).map(card).join('')}</div>${moreBtn(k, list.length)}`;
+  }).join('') + `<div class="list" style="margin-top:16px"><button class="scard add" data-act="edit-shop" data-name="">${I.plusSm}新增店家</button></div>`;
 }
 
 function startEdit(name) {
@@ -2028,6 +2046,11 @@ const ADMIN_ACT = {
     const k = el.dataset.tab; if (k === S.adminTab) return;
     if (isDirty() && !(await askDiscard())) return;
     clearDirty(); S.adminTab = k; render(); window.scrollTo(0, 0);
+  },
+  expand: el => {
+    const k = el.dataset.k; S.expand[k] = !S.expand[k];
+    if (k.indexOf('sugg-') === 0) { const t = k.slice(5), box = $(`[data-sugg="${t}"]`); if (box) box.innerHTML = suggestHtml(t); }   // 只重畫清單，搜尋框不受影響
+    else renderMain();
   },
   'o-pick': el => { const F = S.openForm[el.dataset.type]; F.shop = el.dataset.shop; F.q = ''; F.promos = []; repaintOpen(); },
   'o-clear': el => { const F = S.openForm[el.dataset.type]; F.shop = ''; F.promos = []; repaintOpen(); focusLater(`[data-f="osq"][data-type="${el.dataset.type}"]`); },
