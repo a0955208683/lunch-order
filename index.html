@@ -137,6 +137,23 @@ svg{display:block;flex:none}
 .sugg:active{background:var(--surface-2)}
 .sugg + .sugg{border-top:1px solid var(--line)}
 .sugg small{margin-left:auto;color:var(--muted);font-size:12px;font-weight:400}
+.sbtn.dice-btn{color:var(--on-yolk);background:var(--yolk);border-color:var(--yolk)}
+.sect-h .sbtn{height:32px;font-size:13px;padding:0 10px}
+.rand-hero{width:64px;height:64px;margin:6px auto 10px;border-radius:18px;background:var(--yolk);color:var(--on-yolk);display:grid;place-items:center}
+.rand-hero svg{width:34px;height:34px}
+.rand-choice{display:flex;flex-direction:column;gap:10px;margin-top:18px}
+.rand-choice .btn{justify-content:center}
+.art.sm{width:24px;height:24px;display:inline-block;flex:none}
+.reels{display:flex;flex-direction:column;gap:14px;margin-top:16px}
+.reel{display:grid;grid-template-columns:56px 1fr;gap:12px;align-items:center;background:var(--surface-2);border:1.5px solid var(--line);border-radius:18px;padding:14px}
+.reel-win{height:44px;overflow:hidden;display:flex;align-items:center;min-width:0}
+.reel-name{font-family:var(--f-display);font-weight:400;font-size:26px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.reel-name.tick{animation:reelTick .12s ease-out}
+.reel-name.land{animation:reelLand .45s cubic-bezier(.2,1.6,.4,1);color:var(--leaf)}
+@keyframes reelTick{from{transform:translateY(-70%);opacity:.3}to{transform:none;opacity:1}}
+@keyframes reelLand{0%{transform:scale(.7)}60%{transform:scale(1.12)}100%{transform:scale(1)}}
+.reel-time{grid-column:1 / -1;display:flex;align-items:center;gap:8px}
+.reel-time .field{flex:1;min-width:0;height:40px;-webkit-appearance:none;appearance:none;text-align:center;text-align-last:center}
 .more{display:flex;align-items:center;justify-content:center;gap:4px;width:100%;height:40px;margin-top:8px;border-radius:12px;color:var(--leaf);font-weight:700;font-size:14px;background:transparent}
 .more:active{background:var(--surface-2)}
 .more-i{display:inline-flex;transform:rotate(90deg);transition:transform .2s}
@@ -513,6 +530,7 @@ const I = {
   down: svg('<path d="M12 5v14M6 13l6 6 6-6"/>', 17),
   x: svg('<path d="M7 7l10 10M17 7L7 17"/>', 17),
   share: svg('<path d="M4 13v6a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-6M12 3v12M7.5 7.5L12 3l4.5 4.5"/>', 18),
+  dice: svg('<rect x="4" y="4" width="16" height="16" rx="4"/><circle cx="9" cy="9" r="1.2" fill="currentColor"/><circle cx="15" cy="15" r="1.2" fill="currentColor"/><circle cx="15" cy="9" r="1.2" fill="currentColor"/><circle cx="9" cy="15" r="1.2" fill="currentColor"/>', 16, 2),
 };
 // 店家縮圖：珍奶、便當
 const ART = {
@@ -1177,9 +1195,11 @@ function homeHtml() {
   if (ov.people.length) h += `<button class="ovcard" data-act="open-today">
     <span class="ov-l"><b>今日總覽</b><small class="num">${ov.groups.length} 團 · ${ov.people.length} 人 · ${money(ov.total)}</small></span>
     <span class="ov-r num">${ov.due ? `<small>未收</small><b>${money(ov.due)}</b>` : `<b class="okc">都收齊了</b>`}</span>${I.chev}</button>`;
-  h += `<div class="sect-h"><h2>進行中</h2><span class="num">${open.length} 團</span></div>`;
+  h += `<div class="sect-h"><h2>進行中</h2><span class="num">${open.length} 團</span><span class="spacer"></span>
+    <button class="sbtn" data-act="admin">${I.plusSm}開一團</button><button class="sbtn dice-btn" data-act="rand">${I.dice}隨機</button></div>`;
   h += open.length ? `<div class="list">${open.map(g => gcard(g, false)).join('')}</div>`
-    : `<div class="empty-st"><span class="glyph bento">揪</span><b>現在沒有開團</b><p>開團的人按右上角「管理」就能開一團。</p><button class="btn ghost" data-act="admin">${I.lock}開一團</button></div>`;
+    : `<div class="empty-st"><span class="glyph bento">揪</span><b>現在沒有開團</b><p>開團的人按「開一團」；不知道吃什麼，就交給「隨機」。</p>
+      <div style="display:flex;gap:10px;justify-content:center"><button class="btn ghost auto" data-act="admin">${I.lock}開一團</button><button class="btn auto" data-act="rand">${I.dice}隨機開團</button></div></div>`;
   if (past.length) h += `<div class="sect-h"><h2>已截止</h2><span>最近 3 天</span></div><div class="list">${past.map(g => gcard(g, true)).join('')}</div>`;
   return h;
 }
@@ -1732,6 +1752,92 @@ function adminHtml() {
 
 // 開團：便當、飲料各一區，用搜尋找店家；兩區都選了就一次開兩團
 const OTYPES = ['便當', '飲料'];
+
+/* ================= 隨機開團：不知道吃什麼的時候，交給運氣 ================= */
+async function randomOpen() {
+  if (!(await needPin())) return;
+  const pool = t => S.data.shops.filter(s => s.type === t && !s.disabled);
+  if (!pool('便當').length) { closeSheet(); return toast('還沒有便當店，先到「管理 → 店家」新增'); }
+  openSheet('rand', `<div class="rand-hero">${I.dice}</div>
+    <h2 class="sh-h" style="text-align:center">隨機開團</h2>
+    <div class="sh-sub" style="text-align:center">不知道吃什麼？交給運氣決定。</div>
+    <div class="rand-choice">
+      <button class="btn" data-r="0">${ART.bento.replace('class="art"', 'class="art sm"')}只抽便當</button>
+      <button class="btn ghost" data-r="1" ${pool('飲料').length ? '' : 'disabled'}>${ART.bento.replace('class="art"', 'class="art sm"')}${ART.tea.replace('class="art"', 'class="art sm"')}便當＋飲料</button>
+    </div>
+    ${pool('飲料').length ? '' : '<div class="hint" style="text-align:center">還沒有飲料店，只能抽便當</div>'}`, {
+    mount(root) { root.addEventListener('click', e => { const b = e.target.closest('[data-r]'); if (b && !b.disabled) spinShops(b.dataset.r === '1', {}); }); },
+  });
+}
+// 抽一家：避開暫停的店、今天已經在開的店；重抽時盡量不要跟上一次一樣
+function drawShop(type, avoid) {
+  const busy = new Set(S.data.groups.filter(isOpen).map(g => g.shop));
+  let pool = S.data.shops.filter(s => s.type === type && !s.disabled && !busy.has(s.name));
+  if (!pool.length) pool = S.data.shops.filter(s => s.type === type && !s.disabled);
+  if (pool.length > 1 && avoid) pool = pool.filter(s => s.name !== avoid);
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+function spinShops(withDrink, last) {
+  const types = withDrink ? ['便當', '飲料'] : ['便當'];
+  const picks = {}; types.forEach(t => { picks[t] = drawShop(t, last[t]); });
+  const d = new Date(now() + 60 * 60e3); d.setMinutes(d.getMinutes() < 30 ? 30 : 60, 0, 0);
+  const tm = {}; types.forEach(t => { tm[t] = { h: d.getHours(), m: d.getMinutes() }; });
+  openSheet('rand', `<h2 class="sh-h" id="rd-title" style="text-align:center">抽籤中…</h2>
+    <div class="reels">${types.map(t => `<div class="reel" data-t="${t}">
+      <span class="glyph ${t === '飲料' ? 'drink' : 'bento'}">${t === '飲料' ? ART.tea : ART.bento}</span>
+      <div class="reel-win"><b class="reel-name" data-rn="${t}">？</b></div>
+      <div class="reel-time" data-rt="${t}" hidden><span class="muted">截止</span>
+        <select class="field num" data-rh="${t}" aria-label="時">${Array.from({ length: 24 }, (_, i) => `<option value="${i}" ${i === tm[t].h ? 'selected' : ''}>${pad(i)} 點</option>`).join('')}</select><span>:</span>
+        <select class="field num" data-rm="${t}" aria-label="分">${Array.from({ length: 12 }, (_, i) => i * 5).map(m => `<option value="${m}" ${m === tm[t].m ? 'selected' : ''}>${pad(m)} 分</option>`).join('')}</select></div>
+    </div>`).join('')}</div>
+    <div class="sheet-foot" id="rd-foot" hidden><button class="btn ghost auto" id="rd-again">${I.dice}重抽</button><button class="btn" id="rd-go">就是它了，開團</button></div>`, {
+    mount(root) {
+      const reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      let done = 0;
+      types.forEach((t, ti) => {
+        const el = $(`[data-rn="${t}"]`, root), names = S.data.shops.filter(s => s.type === t && !s.disabled).map(s => s.name);
+        const land = () => {
+          el.textContent = picks[t].name; el.classList.remove('tick'); el.classList.add('land');
+          $(`[data-rt="${t}"]`, root).hidden = false;
+          if (++done === types.length) {
+            $('#rd-title', root).textContent = withDrink ? '今天就吃這兩家！' : '今天就吃這家！';
+            $('#rd-foot', root).hidden = false;
+            try { navigator.vibrate && navigator.vibrate([20, 40, 30]); } catch (e) { }
+          }
+        };
+        if (reduce || names.length < 2) return land();
+        // 拉霸：一開始很快，越轉越慢，第二排晚一點停
+        let delay = 45, i = Math.floor(Math.random() * names.length);
+        const stopAt = 330 + ti * 90;
+        const tick = () => {
+          if (S.sheet !== 'rand' || !root.isConnected) return;
+          if (delay > stopAt) return land();
+          i = (i + 1) % names.length; el.textContent = names[i];
+          el.classList.remove('tick'); void el.offsetWidth; el.classList.add('tick');
+          delay = Math.round(delay * 1.13); setTimeout(tick, delay);
+        };
+        tick();
+      });
+      root.addEventListener('click', async e => {
+        if (e.target.closest('#rd-again')) { const prev = {}; types.forEach(t => { prev[t] = picks[t].name; }); return spinShops(withDrink, prev); }
+        if (!e.target.closest('#rd-go')) return;
+        const list = types.map(t => {
+          const dd = new Date(); dd.setHours(+$(`[data-rh="${t}"]`, root).value, +$(`[data-rm="${t}"]`, root).value, 0, 0);
+          return { shop: picks[t].name, dl: dd.getTime() };
+        });
+        const late = list.find(x => x.dl <= now()); if (late) return toast('「' + late.shop + '」的截止時間已經過了，請選晚一點');
+        const doneBusy = busy(list.length > 1 ? '開團中…（' + list.length + ' 團）' : '開團中…'), ids = [];
+        try {
+          for (const x of list) { const r = await api('openGroup', { pin: PIN, shop: x.shop, deadline: x.dl, note: '🎲 隨機抽中', promos: [] }); ids.push(r.id); }
+          await refresh(); doneBusy(); closeSheet();
+          location.hash = ids.length === 1 ? 'g-' + ids[0] : '';
+          const gs = ids.map(id => S.data.groups.find(g => g.id === id)).filter(Boolean);
+          setTimeout(() => shareSheet('抽中了，開團囉', '🎲 今天隨機抽中！\n' + inviteText(gs)), 80);
+        } catch (err) { doneBusy(); toast(err.message || '沒有成功，再試一次'); }
+      });
+    },
+  });
+}
 function newOpenSec() {
   const d = new Date(now() + 60 * 60e3); d.setMinutes(d.getMinutes() < 30 ? 30 : 60, 0, 0);
   return { shop: '', q: '', h: d.getHours(), m: d.getMinutes(), note: '', promos: [] };
@@ -2328,6 +2434,7 @@ const ACT = {
     catch (e) { renderMain(); toast('有一筆沒存到：' + (e.message || '連線失敗')); }
   },
   'open-today': () => { location.hash = 'today'; },
+  rand: () => randomOpen(),
   'share-today': () => shareSheet('分享今日總覽', overviewShareText()),
   copy: () => copyText(storeText(curGroup())),
   'sheet-close': () => closeSheet(),
